@@ -24,7 +24,10 @@ from tqdm import tqdm
 # phyddle imports
 from phyddle import utilities as util
 from phyddle import network
+from torch_geometric.data import Data as GeoData
+from torch_geometric.loader import DataLoader as GeoLoader
 
+torch.cuda.empty_cache()
 
 ##################################################
 
@@ -44,6 +47,7 @@ def load(args):
     if train_method == 'default':
         return CnnTrainer(args)
     else:
+        #return GnnTrainer(args)
         return NotImplementedError
     
 ##################################################
@@ -66,6 +70,8 @@ class Trainer:
         
         # args
         self.args                   = args
+
+        self.network_type = str(args['network_type'])
 
         # filesystem
         self.fmt_prefix             = str(args['fmt_prefix'])
@@ -109,7 +115,7 @@ class Trainer:
         self.learning_rate      = float(args['learning_rate'])
         self.activation_func    = str(args['activation_func'])
         self.optimizer          = str(args['optimizer'])
-
+        self.phy_hidden_size    = int(args['phy_hidden_size'])
         # initialized later
         self.phy_tensors        = dict()   # init with encode_all()
         self.train_dataset      = None     # init with load_input()
@@ -232,6 +238,109 @@ class Trainer:
 
 ################################################################################
 
+###############################################################################
+#class GnnTrainer(Trainer):
+   # """
+   # Class for Graphical Neural Network (GNN) Trainer.
+   # """
+   # def __init__(self,args):
+     #   """
+    #    Initializes a new GnnTrainer object.
+   #     Args:
+  #          args (dict): Contains phyddle settings.
+ #       """
+#
+#        super().__init__(args)
+    
+       # self.aux_data_names = list()
+      #  self.label_names = list()
+     #   self.num_aux_data = int()
+    #    self.param_cat_names =list()
+   #     self.param_num_names = list()
+  #      self.num_param_num = int()
+ #       self.num_param_cat = int()
+#        self.param_cat = dict()
+
+      #  self.train_dataset = None
+     #   self.valdataset = None
+    #    self.calib_datast = None
+   #     self.model = None
+  #      self.train_label_num_est = None
+ #       self.train_label_num_true = None
+#        self.train_label_cat_est = None
+      #  self.train_label_cat_true = None
+     #   self.train_label_num_est_calib = None
+     #   self.train_label_index =  None
+    #    self.calib_phy_data_tensor = None
+   #     self.train_history = None
+  #      self.train_label_true = None
+      #  self.train_aux_data_mean_sd = (0,0)
+     #   self.train_labels_num_mean_sd = (0,0)
+    #    self.cpi_adjustments = np.array([0,0])
+   #     self.norm_calib_labels_num = None
+  #      self.has_label_cat = False
+ #       self.has_label_num = False
+#
+     #   return
+
+    #def split_tensor_idx(self, num_sample):
+     #   """ 
+    #    Split tensor into parts.
+   #     This function splits the indexes for training examples into training, validation and calibration sets.
+
+  #      Args:
+ #           num_sample(int): The total number of samples in the dataset.
+#
+    #    Returns:
+   #         train_idx (numpy.ndarray): The indices for the training subset
+  #          val_idx (numpy.ndarray): The indices for the validation subset.
+ #           calib_idx (numpy.ndarray): The indics for the calibration subset.
+#
+       # """
+       # num_calib = int(np.floor(num_sample * self.prop_cal))
+      #  num_val = int(np.floor(num_sample * self.prop_val))
+     #   num_train = num_sample - (num_val + num_calib)
+    #    assert num_train > 0
+
+      #  train_idx = np.arrange(num_train, dtype='int')
+     #   val_idx = np.arrange(num_val, dtype='int') + num_train
+    #    calib_idx =np.arrange(num_calib, dtype='int') + num_train +num_val
+
+   #     return train_idx, val_idx, calib_idx
+
+  #  def validate_tensor_idx(self,train_idx, validx, calib_idx):
+  #      msg  ''
+  #      if len(train_idx) == 0:
+  #          msg = 'Training dataset is empty: len(train_idx) == 0'
+  #      elif len(val_idx) == 0:
+  #          msg = 'Validation dataset is empty:  len(val_idx) == 0'
+  #      elif len(calib_idx) == 0:
+  #          msg  'Calibration dataset is empty: len(calib_idx) == 0'
+  #      if msg != '':
+  #          self.logger.write_log('trn', msg)
+  #          raise ValueError(msg)
+  #      return
+
+    #def load_input(self):
+     #   full_phy_data = None
+      #  full_aux_data = None
+       # full_idx_data = None
+       # full_labels = None
+       # if self.tensor_format == 'csv':
+       #     full_phy_data = pd.read_csv(input_phy_data_fn, header=None,
+       #                                 on_bad_lines='skip').to_numpy()
+       #     full_aux_data = pd.read_csv(input_aux_data_fn, header=None,
+       #                                 on_bad_lines='skip').to_numpy()
+       #     full_labels = pd.read_csv(input_labels_fn, header=None,
+       #                                 on_bad_lines='skip').to_numpy()
+       #     full_idx_data = pd.read_csv(input_idx_data_fn,
+       #                             on_bad_lines='skip').to_numpy()
+       #     
+       #     self.aux_data_names = full_aux_data[0,:].tolist()
+       #     sef.label_names = full_labels[0,:].toist()
+       #     full_aux_data= full_aux_ata[1:,:].astype('float64')
+       #     full_labels = full_labels[1:,:].astype('float64')
+
 
 class CnnTrainer(Trainer):
     """
@@ -248,6 +357,7 @@ class CnnTrainer(Trainer):
         # initialize base class
         super().__init__(args)
         
+        self.num_classes = 2
         self.aux_data_names = list()    # init with load_input()
         self.label_names    = list()    # init with load_input()
         self.num_aux_data   = int()     # init with load_input()
@@ -356,6 +466,7 @@ class CnnTrainer(Trainer):
         # input dataset filenames for csv or hdf5
         path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.train'
         input_phy_data_fn = f'{path_prefix}.phy_data.csv'
+        #input_node_1_data_fn = f'{path_prefix}.node_1.csv'
         input_aux_data_fn = f'{path_prefix}.aux_data.csv'
         input_labels_fn   = f'{path_prefix}.labels.csv'
         input_idx_data_fn = f'{path_prefix}.index.csv'
@@ -389,8 +500,27 @@ class CnnTrainer(Trainer):
             full_aux_data       = pd.DataFrame(hdf5_file['aux_data']).to_numpy()
             full_idx_data       = pd.DataFrame(hdf5_file['idx']).to_numpy()
             full_labels         = pd.DataFrame(hdf5_file['labels']).to_numpy()
+            full_node_1_data = pd.DataFrame(hdf5_file['node_1'])#.to_numpy()
+            full_node_2_data = pd.DataFrame(hdf5_file['node_2'])#.to_numpy()
+            full_nodes_dist = pd.DataFrame(hdf5_file['nodes_dist']).to_numpy()
+            full_graph_ids = pd.DataFrame(hdf5_file['graph_id']).to_numpy()
+            full_num_edges = pd.DataFrame(hdf5_file['num_edges']).to_numpy()
+            full_num_nodes = pd.DataFrame(hdf5_file['num_nodes']).to_numpy()
+
+            #full_descendants = pd.DataFrame(hdf5_file['descendant']).to_numpy()
+            #full_ancestors = pd.DataFrame(hdf5_file['ancestor']).to_numpy()
+            #full_time_asym = pd.DataFrame(hdf5_file['descendant']).to_numpy()
+            #full_clade_asym = pd.DataFrame(hdf5_file['clade_asym']).to_numpy()
+
             hdf5_file.close()
-        
+       
+        full_edges_matrix = pd.concat((full_node_1_data, full_node_2_data), axis=1).to_numpy()
+       
+        #full_node_attributes = full_node_attributes[0]
+       
+        full_node_attributes = full_nodes_dist.flatten()
+        #full_node_attributes = [([[np.diag(y) for y in x]  for x in full_nodes_dist ])]
+
         # separate labels for categorical param_est targets
         full_labels_num, full_labels_cat = self.separate_labels(full_labels)
         
@@ -402,18 +532,34 @@ class CnnTrainer(Trainer):
         
         # shuffle datasets
         randomized_idx     = np.random.permutation(full_phy_data.shape[0])
+        print("randomized idx")
+        print(randomized_idx)
+        unique_ids = np.unique(full_graph_ids)
+        cumulative_edges = np.insert(np.cumsum(full_num_edges), 0, 0).astype(int)
+        cumulative_nodes = np.insert(np.cumsum(full_num_nodes), 0, 0).astype(int)
+
+        split_edges = np.split(full_edges_matrix, cumulative_edges[1:])
+        joined_edges = np.concatenate([split_edges[x] for x in randomized_idx])
+        split_nodes = np.split(full_node_attributes, cumulative_nodes[1:])
+        joined_nodes = np.concatenate([split_nodes[x] for x in randomized_idx])
+
         full_phy_data      = full_phy_data[randomized_idx,:]
+        full_node_attributes = joined_nodes
+        full_edges_matrix = joined_edges
         full_aux_data      = full_aux_data[randomized_idx,:]
         full_labels_num    = full_labels_num[randomized_idx,:]
         full_labels_cat    = full_labels_cat[randomized_idx,:]
         full_idx_data      = full_idx_data[randomized_idx]
-
         # reshape phylogenetic tensor data based on CPV+S
         full_phy_data.shape = (num_sample, -1, self.num_data_col)
+
 
         # split dataset into training, test, validation, and calibration parts
         train_idx, val_idx, calib_idx = self.split_tensor_idx(num_sample)
         self.validate_tensor_idx(train_idx, val_idx, calib_idx)
+        print("train idx: " + str(train_idx))
+        print("val idx: " + str(val_idx))
+        print("calib idx: " + str(calib_idx))
         
         # save original training input
         self.train_label_true = full_labels[train_idx,:]
@@ -426,6 +572,11 @@ class CnnTrainer(Trainer):
                                            self.train_aux_data_mean_sd)
         norm_calib_aux_data = util.normalize(full_aux_data[calib_idx,:],
                                              self.train_aux_data_mean_sd)
+        
+        
+        #norm_train_node_attributes = util.normalize(full_node_attributes[train_idx])
+        #norm_val_node_attributes = util.normalize(full_node_attributes[val_idx])
+        #norm_calib_node_attributes = util.normalize(full_node_attributes[calib_idx])
 
         # normalize labels
         norm_train_labels_num, train_labels_num_means, train_labels_num_sd = util.normalize(full_labels_num[train_idx,:])
@@ -439,6 +590,27 @@ class CnnTrainer(Trainer):
         train_phy_data_tensor = full_phy_data[train_idx,:,:]
         val_phy_data_tensor = full_phy_data[val_idx,:,:]
         self.calib_phy_data_tensor = full_phy_data[calib_idx,:,:]
+        
+        self.num_node_features = 1
+
+        # train_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in train_idx]
+        # val_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in val_idx]
+        # calib_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in calib_idx]
+        train_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx])
+        val_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx])
+        calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
+
+        train_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in train_idx]))
+        val_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in val_idx]))
+        calib_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in calib_idx]))
+        
+
+        # train_edges_tensor = (full_edges_matrix[train_idx,:])
+        # val_edges_tensor = (full_edges_matrix[val_idx,:])
+        # calib_edges_tensor = (full_edges_matrix[calib_idx,:])
+        # train_edges_tensor = [[[torch.tensor(z.astype(int)) for z in y] for y in x] for x in train_edges_tensor]
+        # val_edges_tensor = [[[torch.tensor(z.astype(int)) for z in y] for y in x] for x in val_edges_tensor]
+        # calib_edges_tensor = [[[torch.tensor(z.astype(int)) for z in y] for y in x] for x in calib_edges_tensor]
 
         # create categorical label tensors
         train_labels_cat = full_labels_cat[train_idx,:]
@@ -449,24 +621,23 @@ class CnnTrainer(Trainer):
         train_idx_tensor = full_idx_data[train_idx,:]
         val_idx_tensor = full_idx_data[val_idx,:]
         calib_idx_tensor = full_idx_data[calib_idx,:]
-        
+
         # torch datasets
-        self.train_dataset = network.Dataset(train_phy_data_tensor,
-                                             norm_train_aux_data,
+        self.train_dataset = network.Dataset(train_phy_data_tensor, train_node_attr_tensor,
+                                             train_edges_tensor, norm_train_aux_data,
                                              train_idx_tensor,
                                              norm_train_labels_num,
                                              train_labels_cat)
-        self.calib_dataset = network.Dataset(self.calib_phy_data_tensor,
-                                             norm_calib_aux_data,
+        self.calib_dataset = network.Dataset(self.calib_phy_data_tensor, calib_node_attr_tensor,
+                                             calib_edges_tensor, norm_calib_aux_data,
                                              calib_idx_tensor,
                                              self.norm_calib_labels_num,
                                              calib_labels_cat)
-        self.val_dataset   = network.Dataset(val_phy_data_tensor,
-                                             norm_val_aux_data,
+        self.val_dataset   = network.Dataset(val_phy_data_tensor, val_node_attr_tensor,
+                                             val_edges_tensor, norm_val_aux_data,
                                              val_idx_tensor,
                                              norm_val_labels_num,
                                              val_labels_cat)
-
         return
     
 ##################################################
@@ -519,13 +690,16 @@ class CnnTrainer(Trainer):
 ##################################################
 
     def build_network(self):
-        
+       
         # torch multiprocessing, eventually need to get working with cuda
         torch.set_num_threads(self.num_proc)
-
-        # build model architecture
-        self.model = network.ParameterEstimationNetwork(phy_dat_width=self.num_data_col,
+       # if self.network_type == "CNN" or self.network_type == None:
+        if True:
+            # build model architecture
+            self.model = network.ParameterEstimationNetwork(phy_dat_width=self.num_data_col,
                                                         phy_dat_height=self.tree_width,
+                                                        num_node_features = self.num_node_features,
+                                                        num_classes = self.num_classes,
                                                         aux_dat_width=self.num_aux_data,
                                                         lbl_width=self.num_param_num,
                                                         param_cat=self.param_cat,
@@ -577,17 +751,39 @@ class CnnTrainer(Trainer):
 
         """
         # training dataset
-        train_loader = torch.utils.data.DataLoader(dataset=self.train_dataset,
+        train_loader = GeoLoader(dataset=self.train_dataset,
                                                    batch_size=self.trn_batch_size)
+        val_loader = GeoLoader(dataset=self.val_dataset,
+                                                   batch_size=self.trn_batch_size)
+        print("training batch size: ", str(self.trn_batch_size))
         num_batches = int(np.ceil(self.train_dataset.phy_data.shape[0] / self.trn_batch_size))
+        val_num_batches = int(np.ceil(self.val_dataset.phy_data.shape[0] / self.trn_batch_size))
+        calib_num_batches = int(np.ceil(self.calib_dataset.phy_data.shape[0] / self.trn_batch_size))
+
+        print("number of batches: " + str(num_batches))
+
+        for step, data in enumerate(train_loader):
+            print(f'Training step {step + 1}:')
+            # print(data)
+            # print()
 
         # validation dataset
+
         val_phy_dat  = torch.Tensor(self.val_dataset.phy_data).to(self.TORCH_DEVICE)
         val_aux_dat  = torch.Tensor(self.val_dataset.aux_data).to(self.TORCH_DEVICE)
         val_idx_dat  = torch.Tensor(self.val_dataset.idx_data).to(self.TORCH_DEVICE)
         val_lbl_num  = torch.Tensor(self.val_dataset.labels_num).to(self.TORCH_DEVICE)
-        val_lbl_cat  = torch.LongTensor(self.val_dataset.labels_cat).to(self.TORCH_DEVICE)
+        val_lbl_cat  = torch.Tensor(self.val_dataset.labels_cat).to(self.TORCH_DEVICE)
+        # print("VALIDATION GRAPH DATA")
+        # print(self.val_dataset.graph_data)
+        val_graph_dat = self.val_dataset.graph_data.to(self.TORCH_DEVICE)
         val_bad_count = 0
+
+        #print("val_node_data")
+        #print(self.val_dataset.node_data)
+
+        #val_node_data = [torch.Tensor(z).to(self.TORCH_DEVICE) for z in self.val_dataset.node_data]
+        #val_edges_data = [[[torch.Tensor(z).to(self.TORCH_DEVICE) for z in y] for y in x] for x in self.val_dataset.edges_data]
 
         # model device
         # self.model.to(self.TORCH_DEVICE)
@@ -601,8 +797,10 @@ class CnnTrainer(Trainer):
         loss_lower_func = network.QuantileLoss(alpha=q_lower)
         loss_upper_func = network.QuantileLoss(alpha=q_upper)
         loss_categ_func = network.CrossEntropyLoss()
-        loss_aggregation = 'sum'
+        loss_aggregation = 'median'
         
+        print("learning rate: ", str(self.learning_rate))
+
         # optimizer
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         if self.optimizer == 'adam':
@@ -617,6 +815,7 @@ class CnnTrainer(Trainer):
             optimizer = torch.optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         elif self.optimizer == 'sgd':
             optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate)
+        optimizer_copy = optimizer
             
         # optimizer = torch.optim.Adam(self.model.parameters(),
         #                              lr=0.001,
@@ -649,7 +848,7 @@ class CnnTrainer(Trainer):
             trn_mae_value = 0.
 
             train_msg = f'Training epoch {i+1} of {self.num_epochs}'
-            for j, (phy_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
+            for j, (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
                                                                  total=num_batches,
                                                                  desc=train_msg,
                                                                  smoothing=0):
@@ -664,13 +863,29 @@ class CnnTrainer(Trainer):
                 idx_dat = idx_dat.to(self.TORCH_DEVICE)
                 lbl_num = lbl_num.to(self.TORCH_DEVICE)
                 lbl_cat = lbl_cat.to(self.TORCH_DEVICE)
-                
+                graph_dat = graph_dat.to(self.TORCH_DEVICE)
+
+
                 # reset gradients for tensors
                 optimizer.zero_grad()
-                
                 # forward pass of training data to estimate labels
-                lbls_hat = self.model(phy_dat, aux_dat)
 
+                lbls_hat = self.model(phy_dat, graph_dat, aux_dat)
+
+                # print("named params: ", str(self.model.named_parameters()))
+                # for name, param in self.model.named_parameters():
+                #     if param.grad is None:
+                #         print(name, "has NO grad")
+                #     else:
+                #          print(name, "has grad")
+                #print(lbls_hat[3].shape)
+                #print(lbls_hat[3])
+                #print(len(lbls_hat[3])/4)
+                #print(lbls_hat[3][0:int(len(lbls_hat[3])/4)])
+                third_arg = lbls_hat[3] # [0:int(len(lbls_hat[3])/4)]
+                preds = third_arg.long()
+                # print("preds")
+                # print(preds)
                 # calculating the loss between original and predicted data points
                 loss_list = list()
                 if self.has_label_num:
@@ -679,7 +894,7 @@ class CnnTrainer(Trainer):
                     loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
                     loss_list += [ loss_value, loss_lower, loss_upper ]
                 if self.has_label_cat:
-                    loss_categ = loss_categ_func(lbls_hat[3], lbl_cat)
+                    loss_categ = loss_categ_func(preds, lbl_cat)
                     loss_list += [ loss_categ ]
                 # loss_combined = torch.stack(loss_list).sum()
                 
@@ -687,7 +902,7 @@ class CnnTrainer(Trainer):
                     loss_combined = torch.stack(loss_list).sum()
                 elif loss_aggregation == 'geometric':
                     loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
-                elif loss_aggretation == 'median':
+                elif loss_aggregation == 'median':
                     loss_combined = torch.median(torch.stack(loss_list))
 
                 # collect history stats
@@ -701,8 +916,10 @@ class CnnTrainer(Trainer):
                 trn_loss_combined += loss_combined.item() / num_batches
                 
                 # backward pass to update gradients
+                loss_combined.requires_grad = True #KT
                 loss_combined.backward()
 
+                self.model.train()
                 # update network parameters
                 optimizer.step()
                 # lr_scheduler.step()
@@ -711,57 +928,87 @@ class CnnTrainer(Trainer):
                                   trn_loss_combined, trn_mse_value,
                                   trn_mae_value, trn_mape_value ]
 
-            # forward pass of validation to estimate labels
-            val_lbls_hat       = self.model(val_phy_dat, val_aux_dat)
-            
-            # collect validation metrics
-            val_loss_list = list()
-            val_loss_value = 0.
-            val_loss_lower = 0.
-            val_loss_upper = 0.
-            if self.has_label_num:
-                val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
-                val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
-                val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
-                val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
-            # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
-            if self.has_label_cat:
-                val_loss_categ = loss_categ_func(val_lbls_hat[3], val_lbl_cat).item()
-                val_loss_list += [ val_loss_categ ]
-            
-            # val_loss_combined = sum(val_loss_list)
-            if loss_aggregation == 'sum':
-                # val_loss_combined = torch.stack(val_loss_list).sum()
-                val_loss_combined = np.sum(val_loss_list)
-            elif loss_aggregation == 'geometric':
-                val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
-                # val_loss_combined = torch.exp(torch.mean(torch.log(torch.stack(val_loss_list))))
-            elif loss_aggretation == 'median':
-                # val_loss_combined = torch.median(torch.stack(val_loss_list))
-                val_loss_combined = np.median(val_loss_list)
-                
-            val_mse_value = 0.
-            val_mae_value = 0.
-            val_mape_value = 0.
-            if self.has_label_num:
-                val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[0])**2)).item()
-                val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[0]))).item()
-                val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[0]) / val_lbl_num))).item()
-                
-            val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
-                                val_loss_combined, val_mse_value, val_mae_value,
-                                val_mape_value ]
+
+            trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}'
+            print(trn_loss_str)
+
+            self.model.eval()
+            with torch.no_grad():
+                for j, (val_phy_dat, val_graph_dat, val_aux_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
+                                                                    total=val_num_batches,
+                                                                    desc=train_msg,
+                                                                    smoothing=0):
+                    
+                    val_phy_dat = val_phy_dat.to(self.TORCH_DEVICE)
+                    val_aux_dat = val_aux_dat.to(self.TORCH_DEVICE)
+                    val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
+                    val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
+                    val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
+                    val_graph_dat = val_graph_dat.to(self.TORCH_DEVICE)
+
+                    # reset gradients for tensors
+
+                    # forward pass of training data to estimate labels
+
+
+                    # # forward pass of validation to estimate labels
+                    val_lbls_hat       = self.model(val_phy_dat, val_graph_dat, val_aux_dat)
+                    #print("val lbls hat 3")
+                    #print(val_lbls_hat[3])
+                    third_arg = val_lbls_hat[3]#[0:int(len(lbls_hat[3])/4)]
+                    # collect validation metrics
+                    val_loss_list = list()
+                    val_loss_value = 0.
+                    val_loss_lower = 0.
+                    val_loss_upper = 0.
+                    if self.has_label_num:
+                        val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
+                        val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
+                        val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
+                        val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
+                    # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
+                    if self.has_label_cat:
+                        val_loss_categ = loss_categ_func(third_arg, val_lbl_cat).item()
+                        val_loss_list += [ val_loss_categ ]
+                    
+                    # val_loss_combined = sum(val_loss_list)
+                    if loss_aggregation == 'sum':
+                        # val_loss_combined = torch.stack(val_loss_list).sum()
+                        val_loss_combined = np.sum(val_loss_list)
+                    elif loss_aggregation == 'geometric':
+                        val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
+                        # val_loss_combined = torch.exp(torch.mean(torch.log(torch.stack(val_loss_list))))
+                    elif loss_aggregation == 'median':
+                        # val_loss_combined = torch.median(torch.stack(val_loss_list))
+                        val_loss_combined = np.median(val_loss_list)
+                        
+                    val_mse_value = 0.
+                    val_mae_value = 0.
+                    val_mape_value = 0.
+                    if self.has_label_num:
+                        val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[0])**2)).item()
+                        val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[0]))).item()
+                        val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[0]) / val_lbl_num))).item()
+                        
+                    val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
+                                        val_loss_combined, val_mse_value, val_mae_value,
+                                        val_mape_value ]
 
             # raw training metrics for epoch
-            trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}'
             val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}'
             
             # changes in training metrics between epochs
             if i > 0:
                 diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
                 diff_val_loss = val_loss_combined - prev_val_loss_combined
-                rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
-                rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
+                if (prev_trn_loss_combined == 0):
+                    rat_trn_loss = 100
+                else:
+                    rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
+                if (prev_val_loss_combined == 0):
+                    rat_trn_loss = 100
+                else:
+                    rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
                 
                 diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
                 diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
@@ -787,7 +1034,6 @@ class CnnTrainer(Trainer):
             prev_val_loss_combined = val_loss_combined
 
             # display training metric progress
-            print(trn_loss_str)
             print(val_loss_str)
             print('')
 
@@ -837,16 +1083,24 @@ class CnnTrainer(Trainer):
 
         # make initial CPI estimates
         num_calib_examples = self.calib_phy_data_tensor.shape[0]
-        calib_loader = torch.utils.data.DataLoader(dataset=self.calib_dataset,
-                                                   batch_size=num_calib_examples)
+
+        calib_loader = GeoLoader(dataset=self.calib_dataset,
+                                                   batch_size=self.trn_batch_size)#num_calib_examples)
+
+        for step, data in enumerate(calib_loader):
+            print(f'Calib step {step + 1}:')
+            print()
+            quit()
         calib_batch = next(iter(calib_loader))
-        calib_phy_dat, calib_aux_dat = calib_batch[0], calib_batch[1]
+        third_arg = calib_batch[3][0:int(len(calib_batch[3])/4)]
+        calib_phy_dat, calib_graph_dat, calib_aux_dat = calib_batch[0], calib_batch[1], calib_batch[2], third_arg
         # calib_phy_dat = calib_phy_dat.to('cpu')
         # calib_aux_dat = calib_aux_dat.to('cpu')
         
         # get calib estimates
-        calib_label_est = self.model(calib_phy_dat, calib_aux_dat)
+        print("----------------\ncalib est\n\n")
 
+        calib_label_est = self.model(calib_phy_dat, calib_graph_dat, calib_aux_dat)
         # make CPI adjustments
         norm_calib_label_num_est = torch.stack(calib_label_est[0:3]).cpu().detach().numpy()
         norm_calib_num_est_quantiles = norm_calib_label_num_est[1:,:,:]
@@ -875,24 +1129,39 @@ class CnnTrainer(Trainer):
         # get uncalibrated estimates
         # training label estimates
         num_train_examples = 1000
-        train_loader = torch.utils.data.DataLoader(dataset=self.train_dataset,
-                                                   batch_size=num_train_examples)
+        train_loader = GeoLoader(dataset=self.train_dataset,
+                                                   batch_size=self.trn_batch_size)#num_train_examples)
+
+        for step, data in enumerate(train_loader):
+            print(f'Train step {step + 1}:')
+            #print(data)
+                                      
+
         train_batch = next(iter(train_loader))
-        train_phy_dat, train_aux_dat, train_idx_dat, train_labels_num, train_labels_cat = train_batch
+        train_phy_dat, train_graph_dat,train_aux_dat, train_idx_dat, train_labels_num, train_labels_cat = train_batch
         train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
         train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
         train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
         train_labels_cat = train_labels_cat.to(self.TORCH_DEVICE)
+        train_graph_dat = train_graph_dat.to(self.TORCH_DEVICE)
+
+        #train_nodes_dat = [z.to(self.TORCH_DEVICE) for z in train_nodes_dat]
+        #train_edges_dat = [[[z.to(self.TORCH_DEVICE) for z in y] for y in x] for x in train_edges_dat]
         # NOTE: train_idx[0:1000] will be equal to self.train_label_index[0:1000,:]
         #       because DataLoader batches are indexed in same order
         
         # get train estimates
-        label_est = self.model(train_phy_dat, train_aux_dat)
+        label_est = self.model(train_phy_dat, train_graph_dat, train_aux_dat)
+
         
         # numerical vs. cat estimates
         labels_num_est = label_est[0:3]
         labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
         labels_cat_est = label_est[3]
+        print("labels_cat_est")
+        print(labels_cat_est)
+        #labels_cat_est = labels_cat_est[3][0:int(len(labels_cat_est[3])/4)]
+
 
         if self.has_label_num:
             train_labels_num = train_labels_num.cpu().detach().numpy()
@@ -932,8 +1201,10 @@ class CnnTrainer(Trainer):
         # reformat categorical estimates, if they exist
         if self.has_label_cat:
             self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
-            self.train_label_cat_est = self.format_label_cat(labels_cat_est)
+
+            self.train_label_cat_est = pd.DataFrame(labels_cat_est.detach().numpy().astype('float')) #self.format_label_cat(labels_cat_est)
         
+        print("returning from make results")
         return
 
     def format_label_cat(self, x):
@@ -945,6 +1216,7 @@ class CnnTrainer(Trainer):
         
         df_list = list()
         for k,v in x.items():
+            print("applying softmax")
             v = torch.softmax(v, dim=1).cpu().detach().numpy()
             col_names = [ f'{k}_{i}' for i in range(v.shape[1]) ]
             df = pd.DataFrame(v, columns=col_names)
@@ -1070,6 +1342,7 @@ class CnnTrainer(Trainer):
             df_train_label_cat_est.to_csv(train_label_cat_est_fn,
                                           index=False, sep=',',
                                           float_format=util.PANDAS_FLOAT_FMT_STR)
+        print("returning from save results")
 
         return
 

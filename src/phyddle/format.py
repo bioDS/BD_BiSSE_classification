@@ -14,6 +14,10 @@ License:   MIT
 import os
 import sys
 
+from collections import defaultdict
+
+import awkward as ak
+
 # external imports
 import dendropy as dp
 import h5py
@@ -24,6 +28,31 @@ from multiprocessing import Pool, set_start_method, cpu_count
 from tqdm import tqdm
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+
+
+import rpy2
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr, data
+r = robjects.r
+r['source']('~/AIphylo/phylo-inference-ml/R/convert-phylo-to-cblv.R')
+r['source']('~/AIphylo/phylo-inference-ml/R/convert-phylo-to-graph.R')
+
+ape = importr('ape')
+castor = importr('castor')
+phangorn = importr('phangorn')
+MLmetrics = importr('MLmetrics')
+dplyr = importr('dplyr')
+diversitree = importr('diversitree')
+RPANDA = importr('RPANDA')
+latex2exp = importr('latex2exp')
+svMisc = importr('svMisc')
+#igraph = importr('igraph')
+scales = importr('scales')
+rlist = importr('rlist')
+phytools = importr('phytools')
+gen_graph = r['generate_phylogeny_graph']
+offset = -1
+graph_id = 0
 
 # phyddle imports
 from phyddle import utilities as util
@@ -112,6 +141,12 @@ class Formatter:
         self.downsample_taxa    = str(args['downsample_taxa'])
         self.rel_extant_age_tol = float(args['rel_extant_age_tol'])
         self.tree_encode        = str(args['tree_encode'])
+        self.encode_all_sim     = bool(args['encode_all_sim'])
+        self.start_idx          = int(args['start_idx'])
+        self.end_idx            = int(args['end_idx'])
+        self.downsample_taxa    = str(args['downsample_taxa'])
+        self.rel_extant_age_tol = float(args['rel_extant_age_tol'])
+        self.tree_encode        = str(args['tree_encode'])
         self.char_encode        = str(args['char_encode'])
         self.brlen_encode       = str(args['brlen_encode'])
         self.char_format        = str(args['char_format'])
@@ -121,6 +156,7 @@ class Formatter:
         self.prop_test          = float(args['prop_test'])
         self.log_offset         = float(args['log_offset'])
         self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
+        self.save_graph_csv = bool(args['save_graph_csv'])
         
         # set number of processors
         if self.num_proc <= 0:
@@ -363,6 +399,9 @@ class Formatter:
 
         num_total = len(res)
         num_valid = len([x for x in res if x is not None])
+        num_invalid = len([x for x in res if x is None])
+        util.print_str(f'Encoding found {num_invalid} of {num_total} invalid examples.')
+
         util.print_str(f'Encoding found {num_valid} of {num_total} valid examples.')
         if num_valid == 0:
             # exits
@@ -377,8 +416,13 @@ class Formatter:
         for i in res:
             if i is not None:
                 self.rep_data[i[0]] = { 'phy':i[1].flatten(),
-                                        'aux': i[2],
-                                        'lbl': i[3] }
+                                        'node_1':i[3],
+                                        'node_2':i[4],
+                                        'nodes_dist':i[2],
+                                        'num_edges':i[5],
+                                        'num_nodes':i[6],
+                                        'aux': i[7],
+                                        'lbl': i[8]}
 
         return
     
@@ -505,37 +549,136 @@ class Formatter:
 
         # HDF5 file
         out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.hdf5'
-        hdf5_file = h5py.File(out_hdf5_fn, 'w')
 
-        # create HDF5 datasets
-        hdf5_file.create_dataset('idx', rep_idx.shape,
-                                 'i', rep_idx, compression='gzip' )
-        hdf5_file.create_dataset('aux_data_names', (1, num_aux_data),
-                                 'S64', aux_data_names, compression='gzip')
-        hdf5_file.create_dataset('label_names',(1, num_par_est),
-                                 'S64', par_est_names, compression='gzip')
+        with h5py.File(out_hdf5_fn, 'w') as hdf5_file:
 
-        dat_phy = hdf5_file.create_dataset('phy_data',
-                                           (num_samples, num_data_length),
-                                           dtype='f', compression='gzip')
-        dat_aux = hdf5_file.create_dataset('aux_data',
-                                           (num_samples, num_aux_data),
-                                           dtype='f', compression='gzip')
-        dat_lbl = hdf5_file.create_dataset('labels',
-                                           (num_samples, num_par_est),
-                                           dtype='f', compression='gzip')
+           # create HDF5 datasets
+            hdf5_file.create_dataset('idx', rep_idx.shape,
+                                'i', rep_idx, compression='gzip' )
+            hdf5_file.create_dataset('aux_data_names', (1, num_aux_data),
+                                'S64', aux_data_names, compression='gzip')
+            hdf5_file.create_dataset('label_names',(1, num_par_est),
+                                'S64', par_est_names, compression='gzip')
 
-        # Each entry is a dictionary of phylo-state, aux. data, and label
-        res = [ self.rep_data[idx] for idx in rep_idx ]
+            # Each entry is a dictionary of phylo-state, aux, data, and label
+            res = [self.rep_data[idx] for idx in rep_idx ]
+            #edge_len = 0
+            #node_len = 0
+            #if len(res) > 0:
+          #  edge_len = len(np.append([x['graph_edges'] for x in res]))
+          #  node_len = len(np.append([x['graph_nodes'] for x in res]))
+          #  print("edge len " + str(edge_len))
+          #  print("node len " + str(node_len))
+            dat_phy = hdf5_file.create_dataset('phy_data',
+                                        (num_samples, num_data_length),
+                                        dtype='f', compression='gzip')
+            # stack overflow, saving with hp5 arrays of different sizes
+
+            dat_aux = hdf5_file.create_dataset('aux_data',
+                                            (num_samples, num_aux_data),
+                                            dtype='f', compression='gzip')
+            dat_lbl = hdf5_file.create_dataset('labels',
+                                            (num_samples, num_par_est),
+                                            dtype='f', compression='gzip')
+            dat_num_edges = hdf5_file.create_dataset('num_edges',
+                                            (num_samples, 1),
+                                            dtype='f', compression='gzip')
+            dat_num_nodes = hdf5_file.create_dataset('num_nodes',
+                                            (num_samples, 1),
+                                            dtype='f', compression='gzip')
+
         
         # store all numerical data into hdf5)
-        if len(res) > 0:
-            dat_phy[:,:] = np.vstack( [ x['phy'] for x in res ] )
-            dat_aux[:,:] = np.vstack( [ x['aux'] for x in res ] )
-            dat_lbl[:,:] = np.vstack( [ x['lbl'] for x in res ] )
+        #node_1_list = np.concenate([np.array(x['node_1'],dtype = np.float64)+len(x) for x in res])
+            if len(res) > 0:
+                dist_list = [] # defaultdict(list) #np.empty(0, dtype=object)
+                # mean_edge_list = [] #np.empty(0, dtype=object)
+                # time_asym_list = []
+                # clade_asym_list = []
+                # ancestor_list = []
+                # descendant_list = []
+                node_1_list = [] # defaultdict(list)
+                node_2_list = [] # defaultdict(list)
+                graph_id_list = [] # defaultdict(list)
+                res_count = 0
+                node_inc = 0
+                # for x in res:
+                #     if (res_count % 100 == 0):
+                #         print(res_count)
+                #     node_1 = np.array(x['node_1'],dtype = np.float64)
+                #     node_2 = np.array(x['node_2'],dtype = np.float64)
+                #     nodes_dist = np.array(x['nodes_dist'], dtype = np.float64)
+                #     #mean_edge_list.append(gn[1,:])
+                    
+                #     # time_asym_list.append(gn[2,:])
+                #     # clade_asym_list.append(gn[3,:])
+                #     # ancestor_list.append(gn[4,:])
+                #     # descendant_list.append(gn[5,:])
+                #     # node_1_list[val(node_1+node_inc)].append(node_1).tolist()
+                #     node_1_list = node_1_list + (node_1).tolist()
 
-        # close HDF5 files
-        hdf5_file.close()
+                #     node_2_list = node_2_list + (node_2).tolist()
+                #     dist_list = dist_list + (nodes_dist).tolist()
+                #     graph_id_list = graph_id_list + [res_count]*len(node_1)
+                #     #node_inc = node_inc + max(max(node_1), max(node_2))
+                #     res_count = res_count + 1
+            
+                dyn = h5py.vlen_dtype(np.dtype('float64'))
+                
+                # dat_mean_edge = hdf5_file.create_dataset('mean_edge',
+                #         shape=(len(mean_edge_list),), dtype=dyn, compression='gzip')
+                # dat_time_asym = hdf5_file.create_dataset('time_asym',
+                #         shape=(len(time_asym_list),), dtype=dyn, compression='gzip')
+                # dat_clade_asym = hdf5_file.create_dataset('clade_asym',
+                #         shape=(len(clade_asym_list),), dtype=dyn, compression='gzip')
+                # dat_ancestors = hdf5_file.create_dataset('ancestor',
+                #         shape=(len(ancestor_list),), dtype=dyn, compression='gzip')
+                # dat_descendants = hdf5_file.create_dataset('descendant',
+                #         shape=(len(descendant_list),), dtype=dyn, compression='gzip')
+
+                nodes_dist_cat = np.concatenate( [(np.array(x['nodes_dist'], dtype=np.float64)) for x in res ], axis=None)
+                node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
+                node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
+                graph_cat = np.concatenate( [[i]* len(x['node_1']) for i,x in enumerate(res,start=0) ] )
+
+                dat_node_1 = hdf5_file.create_dataset('node_1',
+                                            (len(node_1_cat), ),
+                                            dtype='f', compression='gzip')
+                dat_node_2 = hdf5_file.create_dataset('node_2',
+                                            (len(node_2_cat), ),
+                                            dtype='f', compression='gzip')
+                dat_nodes_dist = hdf5_file.create_dataset('nodes_dist', 
+                    shape=(len(nodes_dist_cat),),  dtype='f', compression='gzip')
+                dat_graph_id = hdf5_file.create_dataset('graph_id', 
+                    shape=(len(graph_cat),),  dtype='f', compression='gzip')
+
+                dat_phy[:,:] = np.vstack( [ x['phy'] for x in res ] )
+                #dat_nodes_dist[:] = dist_list
+                dat_nodes_dist[:] = nodes_dist_cat
+                #dat_graph_id[:] = graph_id_list
+                dat_node_1[:] = node_1_cat
+                dat_node_2[:] = node_2_cat
+                dat_graph_id[:] = graph_cat
+                
+
+                # dat_mean_edge[:] = mean_edge_list
+                # dat_time_asym[:] = time_asym_list
+                # dat_clade_asym[:] = clade_asym_list
+                # dat_ancestors[:] = ancestor_list
+                # dat_descendants[:] = descendant_list
+
+
+                dat_aux[:,:] = np.vstack( [ x['aux'] for x in res ] )
+                dat_num_edges[:] = np.vstack( [ x['num_edges'] for x in res ] )
+                dat_num_nodes[:] = np.vstack( [ x['num_nodes'] for x in res ] )
+
+                dat_lbl[:,:] = np.vstack( [ x['lbl'] for x in res ] )
+                
+
+    # close HDF5 files
+#        hdf5_file.close()
+ #       print("KT: close files\n")
+
 
         return
     
@@ -552,13 +695,7 @@ class Formatter:
 
         Args:
             data_str (str): specifies 'test' or 'train' dataset
-
         """
-        assert data_str in ['test', 'train', 'empirical']
-        
-        # analysis info
-        rep_idx               = self.split_idx[data_str]
-        rep_idx               = np.array([ idx for idx in rep_idx if idx in self.rep_data ])
         first_aux_data_values = list(self.rep_data.values())[0]['aux']
         first_par_est_values  = list(self.rep_data.values())[0]['lbl']
         aux_data_names        = first_aux_data_values.columns.to_list()
@@ -579,6 +716,8 @@ class Formatter:
         in_prefix     = f'{self.sim_dir}/{self.sim_prefix}'
         out_idx_fn    = f'{out_prefix}.index.csv'
         out_phy_fn    = f'{out_prefix}.phy_data.csv'
+        out_edges_fn = f'{out_prefix}.graph_edges.csv'
+        out_nodes_fn = f'{out_prefix}.graph_nodes.csv'
         out_aux_fn    = f'{out_prefix}.aux_data.csv'
         out_lbl_fn    = f'{out_prefix}.labels.csv'
         
@@ -588,6 +727,16 @@ class Formatter:
                 x = self.rep_data[idx]['phy']
                 s = util.ndarray_to_flat_str(x) + '\n'
                 outfile.write(s)
+
+        with open(out_edges_fn, 'w') as outfile:
+            for idx in rep_idx:
+                x = self.rep_data[idx]['graph_edges']
+                outfile.write(x)
+        
+        with open(out_nodes_fn, 'w') as outfile:
+            for idx in rep_idx:
+                x = self.rep_data[idx]['graph_nodes']
+                outfile.write(x)
 
         # aux. data tensor
         with open(out_aux_fn, 'w') as outfile:
@@ -619,6 +768,21 @@ class Formatter:
 
         return
 
+    #def get_node_df(phylo):
+    #    """Python version of function from phylo-inference-ml"""
+    #    n_taxa = len(phy.leaf_nodes())
+    #    n_nodes = 2*n_taxa + 1
+    #    dist = get_all_distances_to_root(phylo, as_edge_count = FALSE)
+    #    ancestor = get_all_distances_to_root(phylo, as_edge_count = TRUE)
+    #    for (i in 1:n_nodes):
+    #        descendat = len(
+
+  # def generate_phylo_graph(phylo):
+  #  """ Python version of function from phylo-inference-ml"""
+   #     df_edge = get_edge_df(phylo)
+ #       df_node = get_node_df(phylo)
+  #      return list(df_edge, df_node)
+
     def encode_one_star(self, args):
         """Wrapper for encode_one w/ unpacked args"""
         return self.encode_one(*args)
@@ -628,6 +792,13 @@ class Formatter:
         Encode a single simulated raw dataset into tensor format.
          
         This function transforms raw input into tensor outputs. The inputs are
+        read from a tree file and data matrix file. The tree is filtered to
+        target ranges of taxon counts and pruned of non-extant taxa.
+        
+        Trees are then binned into tree-width categories (number of columns for
+        compact vector representation). Next, trees and character data are
+        encoded into extended CBLV or CDV formats that contain additional state
+        encoded into extended CBLV or CDV formats that contain additional state
         read from a tree file and data matrix file. The tree is filtered to
         target ranges of taxon counts and pruned of non-extant taxa.
         
@@ -660,6 +831,8 @@ class Formatter:
         prune_fn   = tmp_fn + '.extant.tre'
         down_fn    = tmp_fn + '.downsampled.tre'
         cpsv_fn    = tmp_fn + '.phy_data.csv'
+        graph_edges_fn   = tmp_fn + '.graph_edges.csv'
+        graph_nodes_fn = tmp_fn + '.graph_nodes.csv'
         aux_fn     = tmp_fn + '.aux_data.csv'
         lbl_fn     = tmp_fn + '.labels.csv'
         par_est_fn = tmp_fn + '.param_est.csv'
@@ -749,6 +922,24 @@ class Formatter:
             self.logger.write_log('fmt', f'Too few taxa (<{self.min_num_taxa}) for {tre_fn}')
             return
 
+
+
+        phy_str = phy.as_string(schema="newick")
+        global offset
+        graph_data = gen_graph(ape.read_tree(text=phy_str), offset=offset)
+        # graph_data = [list(graph_data[i]) for i in range(len(graph_data))]
+        edge_data = pd.DataFrame({graph_data[1].rx2('node1'), graph_data[1].rx2('node2')})
+        nodes_dist = graph_data[0].rx2('dist')
+        node_1 = graph_data[1].rx2('node1')
+        node_2 = graph_data[1].rx2('node2')
+        num_edges = max(len(node_1), len(node_2))
+        num_nodes = len(nodes_dist)
+        offset = offset + num_edges
+        save_graph_csv_ = self.save_graph_csv or save_graph_csv
+        if save_graph_csv_  and graph_data is not None:
+            graph_str =  edge_data.to_string(index_names=False, index=False, header=False)#util.ndarray_to_flat_str(np.array(graph_data[1])) + "\n" #util.ndarray_to_flat_str(np.array(graph_data)) + '\n'
+            util.write_to_file(graph_str, graph_edges_fn)
+            util.write_to_file(util.ndarray_to_flat_str(np.array(graph_data[0])) + "\n", graph_nodes_fn)
         # create compact phylo-state vector, CPV+S = {CBLV+S, CDV+S}
         cpvs_data = util.encode_cpvs(phy, dat, tree_width=self.tree_width,
                                      tree_encode_type=self.brlen_encode,
@@ -801,9 +992,11 @@ class Formatter:
 
         # save summ. stats.
         aux_data.to_csv(aux_fn, index=False, float_format=util.PANDAS_FLOAT_FMT_STR)
-        
+
+    
+
         # done!
-        return idx, cpvs_data, aux_data, param_est
+        return idx, cpvs_data, nodes_dist, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
     
     def make_summ_stat(self, phy, dat):
         """
@@ -1238,8 +1431,6 @@ class Formatter:
             'labels': labels,
             'label_names': label_names,
             'aux_data_names': aux_data_names
-        }
-        
+            }
         return ret
-        
-##################################################
+
