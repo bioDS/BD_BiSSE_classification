@@ -21,6 +21,7 @@ from torch import nn
 from torch_geometric.nn import GraphConv, GCNConv, SAGEConv
 from torch_geometric.nn import global_mean_pool
 from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch as GeoBatch
+from torch_geometric.utils import to_torch_coo_tensor
 import torch.nn.functional as F
 
 # phyddle imports
@@ -46,14 +47,6 @@ class GCN(torch.nn.Module):
         self.TORCH_DEVICE = torch.device(self.TORCH_DEVICE_STR)
 
     def forward(self, x, edge_index, batch):
-        # print("f: max edge_index:", edge_index.max().item())
-        # print("f: min edge_index:", edge_index.min().item())
-        # print("initial shape")
-        # # print(x.shape)
-        # np.set_printoptions(threshold=10000)
-        # torch.set_printoptions(profile="full")
-        #print(x.data)
-        #print(edge_index)
         # 1. Obtain node embeddings 
         x = x.to(self.TORCH_DEVICE)
         if batch is None:
@@ -97,40 +90,16 @@ class Dataset(Geoset):
         self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
         self.len         = len(self.labels_num) #self.labels_num.shape[0]
 
-
-        self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=torch.from_numpy(edges_data.astype('int')), y=labels_cat)
-        min_index =   self.graph_data .edge_index.min()
-        self.graph_data.edge_index = torch.sub(self.graph_data.edge_index, min_index)
-        # print("max value")
-        # print(self.graph_data.edge_index.max())
-
-        
-        # print("GRAPH DATA network")
-        # print(self.graph_data.edge_index)
-        # print("type")
-        # print(type(self.graph_data))
-        unique = torch.unique(self.graph_data.edge_index)
-        # print(torch.unique(self.graph_data.edge_index))
-        # print("difference")
-        all = torch.arange(self.graph_data.edge_index.max()+1)
+        edges_data = torch.from_numpy(edges_data.astype('int'))
+        min_index =   edges_data.min()
+        edges_data = torch.sub(edges_data, min_index)
+        unique = torch.unique(edges_data)
+        all = torch.arange(edges_data.max()+1)
         difference = all[torch.isin(all, unique, invert=True)]
-        # print(difference)
-        # print("reduction")
         reduction = torch.searchsorted(difference, all, right=False)
-        # print("reduction length and edge length")
-        # print(reduction.shape,  self.graph_data.edge_index.shape)
-        self.graph_data.edge_index =  torch.sub(self.graph_data.edge_index, reduction[self.graph_data.edge_index])
-        # print(reduction)
-        # print("new edges")
-        # print(self.graph_data.edge_index)
-        # print("new max")
-        # print(self.graph_data.edge_index.max())
-        # print("edges shape")
-        # print(self.graph_data.edge_index.shape)
-                # self.graph_data = []
-        # for z in range(self.len):
-        #     edges_stacked = torch.stack([e[0] for e in edges_data[z]], dim=0).long()
-        #     self.graph_data.append(GeoData(x=node_data[z], edge_index=edges_stacked))#torch.tensor(edges_data[z], dtype=torch.long)))
+        edges_data=  torch.sub(edges_data, reduction[edges_data])
+        self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
+
 
 
     # Getting the data
@@ -399,14 +368,9 @@ class ParameterEstimationNetwork(nn.Module):
 
             if graph_dat.batch is None:
                 graph_dat.batch = graph_dat.x.new_zeros(graph_dat.x.size(0), dtype=torch.long)
-            # print("shapes")
-            # print(graph_dat.x.shape, graph_dat.edge_index.shape, graph_dat.batch.shape)
 
-            # print("max edge_index:", graph_dat.edge_index.max().item())
-            # print("min edge_index:", graph_dat.edge_index.min().item())
 
             x_concat = self.phy_std(graph_dat.x, graph_dat.edge_index, graph_dat.batch)
-            #print(graph_dat.edge_index)
             x_point = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_lower = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_upper = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
@@ -454,8 +418,8 @@ class ParameterEstimationNetwork(nn.Module):
                 setattr(self, k_str, k_mod_list)
         else:
             x_categ = x_concat#.to(self.TORCH_DEVICE)
-            #print("x categ")
-            #print(x_categ)
+            # print("x categ")
+            # print(x_categ)
             
         # return loss
         return x_point, x_lower, x_upper, x_categ
@@ -509,10 +473,7 @@ class CrossEntropyLoss(nn.Module):
         # print(predictions)
         # print("targets")
         # print(targets)
-
-        # print(predictions.dtype)
-        # print(targets.dtype)
-        loss_func = torch.nn.CrossEntropyLoss()
+        loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
 
         
         # assumes that order of entries in predictions
@@ -520,6 +481,9 @@ class CrossEntropyLoss(nn.Module):
         #for i,(k,v) in enumerate(predictions.items()):
            #loss_list.append(loss_func(v, targets[:,i]))
         loss_list = [loss_func(predictions, targets)]
+        # print("list")
+        # print(loss_list)
+
 
         return torch.sum(torch.stack(loss_list))
 

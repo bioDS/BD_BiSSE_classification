@@ -169,8 +169,10 @@ def settings_registry():
         'char_format':         {'step': 'FTE',   'type': str,   'section': 'Format',  'default': 'nexus',         'help': 'File format for character data', 'choices': ['csv', 'nexus']},
         'tensor_format':       {'step': 'FTEP',  'type': str,   'section': 'Format',  'default': 'hdf5',          'help': 'File format for training example tensors', 'choices': ['csv', 'hdf5']},
         'save_phyenc_csv':     {'step': 'F',     'type': str,   'section': 'Format',  'default': 'F',             'help': 'Save encoded phylogenetic tensor encoding to csv?', 'bool': True},
+        'save_graph_csv':       {'step':'F', 'type':str, 'section':'Format', 'default':'F',                     'help': 'Save graph encoding', 'bool': True},
 
         # training options
+        'network_type':         {'step':'TEP',      'type': str,    'section':'Train', 'default':'CNN',             'help': 'CNN or GNN architecture'},
         'num_epochs':           {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 50,             'help': 'Number of training epochs'},
         'num_early_stop':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 3,              'help': 'Number of consecutive validation loss gains before early stopping'},
         'trn_batch_size':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 512,            'help': 'Training batch sizes'},
@@ -185,6 +187,7 @@ def settings_registry():
         'activation_func':      {'step': 'T',      'type': str,    'section': 'Train',  'default': 'relu',         'help': 'Activation function for all internal layers', 'choices': ['relu', 'leaky_relu', 'elu', 'tanh', 'sigmoid']}, 
         'log_offset':           {'step': 'FTEP',   'type': float,  'section': 'Train',  'default': 1.0,            'help': 'Offset size c when taking ln(x+c) for zero-valued variables'},
         'phy_channel_plain':    {'step': 'T',      'type': list,   'section': 'Train',  'default': [64, 96, 128],  'help': 'Output channel sizes for plain convolutional layers for phylogenetic state input'},
+        'phy_hidden_size':      {'step':'T', 'type':int, 'section':'Train', 'default':50, 'help':'hidden layer size'},
         'phy_channel_stride':   {'step': 'T',      'type': list,   'section': 'Train',  'default': [64, 96],       'help': 'Output channel sizes for stride convolutional layers for phylogenetic state input'},
         'phy_channel_dilate':   {'step': 'T',      'type': list,   'section': 'Train',  'default': [32, 64],       'help': 'Output channel sizes for dilate convolutional layers for phylogenetic state input'},
         'aux_channel':          {'step': 'T',      'type': list,   'section': 'Train',  'default': [128, 64, 32],  'help': 'Output channel sizes for dense layers for auxiliary data input'},
@@ -2685,6 +2688,7 @@ class Logger:
 #     'param_data'        : [],               # model parameters that are known (aux. data)
 #     'tensor_format'     : 'hdf5',           # save as compressed HDF5 or raw csv
 #     'save_phyenc_csv'   : False,            # save intermediate phylo-state vectors to file
+#       'save_graph_csv' : False, 
 
 #     #-------------------------------#
 #     # Train Step settings           #

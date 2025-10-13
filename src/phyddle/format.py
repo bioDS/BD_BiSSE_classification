@@ -926,10 +926,12 @@ class Formatter:
 
         phy_str = phy.as_string(schema="newick")
         global offset
+        graph_data_base = gen_graph(ape.read_tree(text=phy_str), offset=0)
+
         graph_data = gen_graph(ape.read_tree(text=phy_str), offset=offset)
         # graph_data = [list(graph_data[i]) for i in range(len(graph_data))]
         edge_data = pd.DataFrame({graph_data[1].rx2('node1'), graph_data[1].rx2('node2')})
-        nodes_dist = graph_data[0].rx2('dist')
+        nodes_dist = graph_data_base[0].rx2('dist')
         node_1 = graph_data[1].rx2('node1')
         node_2 = graph_data[1].rx2('node2')
         num_edges = max(len(node_1), len(node_2))
