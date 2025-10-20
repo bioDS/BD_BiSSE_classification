@@ -18,26 +18,170 @@ import numpy as np
 import torch
 import torch.nn.functional as func
 from torch import nn
-from torch_geometric.nn import GraphConv, GCNConv, SAGEConv
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import GraphConv, GCNConv, SAGEConv, BatchNorm
+from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
 from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch as GeoBatch
 from torch_geometric.utils import to_torch_coo_tensor
 import torch.nn.functional as F
+from torch_scatter import scatter_add
+import random
 
 # phyddle imports
 # from phyddle import utilities as util
 
 ##################################################
 
+# https://github.com/ameliemelo/Phylo_Inference/blob/main/BiSSE/GNN_PhyloPool.py
+
+def get_valid_node_indices(initial_num_nodes):
+    num_conv_layers=3
+    pooling_factor = 2
+    ker_size = 5
+    valid_node_count = initial_num_nodes
+    for _ in range(num_conv_layers):
+        valid_node_count = (valid_node_count - (ker_size//2)-(ker_size//2)) // pooling_factor
+    return valid_node_count
+
+def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
+    if batch is None and max_num_nodes is None:
+        mask = torch.ones(1, x.size(0), dtype=torch.bool, device=x.device)
+        return x.unsqueeze(0), mask
+
+    batch_size = batch[-1].item() + 1
+    num_nodes = scatter_add(batch.new_ones(x.size(0)), batch, dim=0, dim_size=batch_size)
+    cum_nodes = torch.cat([batch.new_zeros(1), num_nodes.cumsum(dim=0)])
+    tmp = torch.arange(batch.size(0), device=x.device) - cum_nodes[batch]
+    idx = tmp + (batch * max_num_nodes)
+
+    size = [batch_size * max_num_nodes] + list(x.size())[1:]
+    out = torch.as_tensor(fill_value, device = x.device)
+    out = out.to(x.dtype).repeat(size)
+    out[idx] = x
+    out = out.view([batch_size, max_num_nodes] + list(x.size())[1:])
+    return out, num_nodes
+
+class GCN_PhyloPool(torch.nn.Module):
+    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda):
+        super(GCN_PhyloPool, self).__init__()
+        torch.manual_seed(12345)
+        self.n_parts = 10
+        ker_size = 5
+        self.gconv1 = GraphConv(num_node_features, hidden_channels) #GCNConv
+        self.gconv2 = GraphConv(hidden_channels, hidden_channels)
+        self.gconv3 = GraphConv(hidden_channels, hidden_channels)
+        self.conv1 = nn.Conv1d(hidden_channels, 2*hidden_channels, kernel_size=ker_size)
+        self.conv2= nn.Conv1d(2*hidden_channels, 4*hidden_channels, kernel_size=ker_size)
+        self.conv3= nn.Conv1d(4*hidden_channels, 8*hidden_channels, kernel_size=ker_size)
+        self.message_passing_layers = nn.ModuleList()
+        self.message_passing_layers.append(self.gconv1)
+        self.message_passing_layers.append(self.gconv2)
+        self.message_passing_layers.append(self.gconv3)
+
+        self.bn1 = BatchNorm(hidden_channels)
+        self.bn2 = BatchNorm(hidden_channels)
+        self.bn3 = BatchNorm(hidden_channels)
+        self.bn4 = BatchNorm(2*hidden_channels)
+
+        self.lin1 = nn.Linear(8*hidden_channels*self.n_parts, out_features = 100)
+        self.lin2 = nn.Linear(100, num_classes)
+
+        self.TORCH_DEVICE_STR = (
+            "cuda"
+            if torch.cuda.is_available() and use_cuda
+            else "cpu"
+        )
+        self.TORCH_DEVICE = torch.device(self.TORCH_DEVICE_STR)
+
+    def forward(self, x, edge_index, batch):
+        if batch is None:
+                batch = x.new_zeros(x.size(0), dtype=torch.long)
+        batch = batch.to(self.TORCH_DEVICE)
+        batch_size = batch.max().item() + 1
+        edge_index = edge_index.to(self.TORCH_DEVICE)
+
+        x = x.to(self.TORCH_DEVICE)
+        for mp_layer in self.message_passing_layers:
+            x = mp_layer(x, edge_index)
+            x = F.relu(x)
+            x = F.dropout(x, p=0.001, training=self.training)
+            # 1. Obtain node embeddings 
+            
+            x, num_nodes = to_dense_batch(x, batch)
+            x_padded = x.permute(0,2,1)
+
+            x_padded = F.relu(self.conv1(x_padded))
+            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
+            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
+
+            x_padded = F.relu(self.conv2(x_padded))
+            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
+            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
+
+            x_padded = F.relu(self.conv3(x_padded))
+            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
+            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
+
+            valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
+            selected_nodes_list = []
+            for i, valid in enumerate (valid_nodes):
+                valid_indices = torch.arange(valid) # Generate valid node indices
+                base_size = valid // self.n_parts # Base size of each part
+                remainder = valid % self.n_parts # Number of remaining indices to distribute
+
+                # Calculate the sizes of the parts
+                part_sizes = [base_size + 1 if j < remainder else base_size for j in range(self.n_parts)]
+                part_means = []
+                start_idx = 0
+
+                for part_size in part_sizes:
+                    end_idx = start_idx + part_size
+                    part_indices = valid_indices[start_idx:end_idx]
+                    start_idx = end_idx
+                    part_mean = x_padded[i, :, part_indices].mean(dim=1)
+                    part_means.append(part_mean)
+                selected_nodes_list.append(torch.stack(part_means))
+            
+            selected_nodes = torch.stack(selected_nodes_list)
+            selected_nodes = selected_nodes.permute(0,2,1)
+            selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
+            out = F.relu(self.lin1(selected_nodes_flattened))
+            out = F.dropout(out, p=0.001, training=self.training)
+            out = self.lin2(out)
+            # print("returning", out)
+            return out
+
 # https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
 class GCN(torch.nn.Module):
-    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda):
+    def __init__(self, num_node_features, hidden_channels, num_classes, graph_conv, use_cuda):
         super(GCN, self).__init__()
         torch.manual_seed(12345)
-        self.conv1 = GCNConv(num_node_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.lin = nn.Linear(hidden_channels, num_classes)
+        print("hidden channels:", str(hidden_channels))
+        if (graph_conv):
+            self.conv1 = GraphConv(num_node_features, hidden_channels) #GCNConv # GraphConv
+            self.conv2 = GraphConv(hidden_channels, hidden_channels)
+            self.conv3 = GraphConv(hidden_channels, hidden_channels)
+            self.conv4 = GraphConv(hidden_channels, hidden_channels)
+            self.conv5 = GraphConv(hidden_channels, 2*hidden_channels)
+        else:
+        #     self.conv1 = GCNConv(num_node_features, hidden_channels) #GCNConv # GraphConv
+        #     self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        #     self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        #     self.conv4 = GCNConv(hidden_channels, 2*hidden_channels)
+        # self.lin1 = nn.Linear(2*hidden_channels, hidden_channels)
+        # self.lin2 = nn.Linear(hidden_channels, num_classes)
+        # self.lin3 = nn.Linear(num_node_features, hidden_channels)
+        # self.fc1  = torch.nn.Linear(2*hidden_channels, hidden_channels)
+        # self.fc2  = torch.nn.Linear(hidden_channels, num_classes)
+        # self.bn1 = BatchNorm(hidden_channels)
+        # self.bn2 = BatchNorm(hidden_channels)
+        # self.bn3 = BatchNorm(hidden_channels)
+        # self.bn4 = BatchNorm(2*hidden_channels)
+       
+            self.conv1 = GCNConv(num_node_features, hidden_channels)
+            self.conv2 = GCNConv(hidden_channels, hidden_channels)
+            self.conv3 = GCNConv(hidden_channels, hidden_channels)
+            self.lin = nn.Linear(hidden_channels, num_classes)
+
 
         self.TORCH_DEVICE_STR = (
             "cuda"
@@ -49,27 +193,53 @@ class GCN(torch.nn.Module):
     def forward(self, x, edge_index, batch):
         # 1. Obtain node embeddings 
         x = x.to(self.TORCH_DEVICE)
-        if batch is None:
-            batch = x.new_zeros(x.size(0), dtype=torch.long)
-        #print("batch: ", (batch))
+        # if batch is None:
+        #     batch = x.new_zeros(x.size(0), dtype=torch.long)
         edge_index = edge_index.to(self.TORCH_DEVICE)
         batch = batch.to(self.TORCH_DEVICE)
+
+
+        
+        
+        # x = self.conv1(x, edge_index)
+        # #x = self.bn1(x)
+        # x = F.relu(x)
+        # x = F.dropout(x, p=0.2, training=self.training)
+        # x = self.conv2(x, edge_index)
+        # #x = self.bn2(x)
+        # x = F.relu(x)
+        # x = F.dropout(x, p=0.2, training=self.training)
+        # x = self.conv3(x, edge_index)
+        # #x = self.bn3(x)
+        # x = F.relu(x)
+        # x = F.dropout(x, p=0.2, training=self.training)
+        # x = self.conv4(x, edge_index)
+        # #x = self.bn4(x)
+        # x = F.relu(x)
+        # x = F.dropout(x, p=0.2, training=self.training)
+        # x = global_mean_pool(x, batch) 
+        # x = self.fc1(x)
+        # x = self.fc2(x)
+
+
         x = self.conv1(x, edge_index)
-        #print("edge index")
-        #print(edge_index)
-        x = x.relu()
+        x = F.relu(x)
         x = self.conv2(x, edge_index)
-        x = x.relu()
+        x = F.relu(x)
         x = self.conv3(x, edge_index)
 
         # 2. Readout layer
         x = global_mean_pool(x, batch)  # [batch_size, hidden_channels]
+        #print("after pooling")
+        #print(x)
 
         # 3. Apply a final classifier
         x = F.dropout(x, p=0.5, training=self.training)
+        #print("after dropout")
+        #print(x)
         x = self.lin(x)
-        # print("end shape")
-        # print(x.shape)
+
+
         return x
 
 
@@ -82,7 +252,7 @@ class Dataset(Geoset):
     phylogenetic-state tensors, auxiliary data tensors, and labels.
     """
     # Constructor
-    def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat):
+    def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
         self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
         self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
         self.idx_data    = torch.from_numpy(idx_data.astype('int'))
@@ -98,13 +268,33 @@ class Dataset(Geoset):
         difference = all[torch.isin(all, unique, invert=True)]
         reduction = torch.searchsorted(difference, all, right=False)
         edges_data=  torch.sub(edges_data, reduction[edges_data])
-        self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
-
-
+        #self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
+        self.graph_dat = []
+        self.id_list = graph_ids
+        i = 0
+        num_nodes = num_nodes.astype(int)
+        num_edges = num_edges.astype(int)
+        prev_edge_ind = 0
+        prev_node_ind = 0
+        # print("edges:")
+        # print(edges_data)
+        # print(edges_data.shape)
+        for i in range(len(graph_ids)):
+            # print("graph =", graph_ids[i], "nodes: ", num_nodes[i], "edges:", num_edges[i])
+            current_edge_ind = prev_edge_ind + int(num_edges[i])
+            current_node_ind = prev_node_ind + int(num_nodes[i])
+            selected_nodes = node_data[prev_node_ind:current_node_ind]
+            selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
+        
+            #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+            self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))
+            prev_edge_ind = current_edge_ind
+            prev_node_ind = current_node_ind
 
     # Getting the data
     def __getitem__(self, index):
-        return (self.phy_data[index], self.graph_data, #[index],
+        #print("getting graph  index", str(index), ":",self.graph_dat[index] )
+        return (self.phy_data[index], self.graph_dat[index], #[index],
                 self.aux_data[index], self.idx_data[index],
                 self.labels_num[index], self.labels_cat[index])
     
@@ -125,7 +315,7 @@ class ParameterEstimationNetwork(nn.Module):
             args (dict): Contains phyddle settings.
     """
     def __init__(self, num_node_features, num_classes, phy_dat_width, phy_dat_height, aux_dat_width,
-                 lbl_width, param_cat, args):
+                 lbl_width, param_cat, phylo_pool, graph_conv, args):
 
 
         
@@ -141,6 +331,8 @@ class ParameterEstimationNetwork(nn.Module):
         self.param_cat      = param_cat
         self.param_cat_size = dict()
         self.model_type_categ_ffnn = []
+        
+        self.phylo_pool = phylo_pool
 
         self.has_param_num  = self.lbl_width > 0
         self.has_param_cat  = len(self.param_cat) > 0
@@ -296,11 +488,13 @@ class ParameterEstimationNetwork(nn.Module):
             # self.phy_std.append(GCNConv(self.phy_std_hidden_size, self.phy_std_hidden_size*2))
             # self.phy_std.append(nn.Linear(2*self.phy_std_hidden_size, self.phy_std_hidden_size))
             # self.phy_std.append(nn.Linear(self.phy_std_hidden_size, num_classes))    
-           
-            self.phy_std = GCN(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, use_cuda = self.use_cuda)
+            if (self.phylo_pool):
+                self.phy_std = GCN_PhyloPool(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, use_cuda = self.use_cuda)
+            else:
+                self.phy_std = GCN(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, graph_conv = graph_conv, use_cuda = self.use_cuda)
 
         # initialize weights for layers
-        #self._initialize_weights()
+        self._initialize_weights()
 
         return
 
@@ -315,8 +509,11 @@ class ParameterEstimationNetwork(nn.Module):
             if isinstance(m, torch.nn.Conv1d):
                 torch.nn.init.kaiming_uniform_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
                 torch.nn.init.constant_(m.bias, 0)
-            if isinstance(m, torch.nn.Linear):
-                torch.nn.init.kaiming_uniform_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
+            if isinstance(m, GraphConv):
+                torch.nn.init.xavier_uniform_(m.lin.weight)
+                torch.nn.init.constant_(m.bias, 0)
+            if isinstance(m, GCNConv):
+                torch.nn.init.xavier_uniform_(m.lin.weight)
                 torch.nn.init.constant_(m.bias, 0)
         return
 
@@ -366,11 +563,19 @@ class ParameterEstimationNetwork(nn.Module):
             # x_concat = x_std
             graph_dat = graph_dat.to(self.TORCH_DEVICE)
 
-            if graph_dat.batch is None:
-                graph_dat.batch = graph_dat.x.new_zeros(graph_dat.x.size(0), dtype=torch.long)
+            # if graph_dat.batch is None:
+            #     graph_dat.batch = graph_dat.x.new_zeros(graph_dat.x.size(0), dtype=torch.long)
 
+            #print("data.edge_index")
+            #print(graph_dat.edge_index)
 
-            x_concat = self.phy_std(graph_dat.x, graph_dat.edge_index, graph_dat.batch)
+            norm_features = (graph_dat.x - 0.5)*2
+            # print("norm features")
+            # print(norm_features.flatten())
+            # print(norm_features.shape)
+            # print(graph_dat.edge_index.shape)
+            # print(graph_dat.batch.shape)
+            x_concat = self.phy_std(norm_features, graph_dat.edge_index, graph_dat.batch)
             x_point = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_lower = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_upper = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
@@ -466,21 +671,33 @@ class CrossEntropyLoss(nn.Module):
         """Simple quantile loss function for prediction intervals."""
         
         loss_list = []
-        targets = targets.flatten().long()
+        targets = targets.flatten() #.long()
         predictions = predictions.float()
+        weights = 1 / torch.bincount(targets).float()
+        weight_tensor = targets.clone().float()
+        zero_indices = weight_tensor == 0
+        one_indices =  weight_tensor == 1
+        weight_tensor[zero_indices] = weights[0]
+        weight_tensor[one_indices] = weights[1]
+        targets = targets.float()
+        weight_tensor = weight_tensor.flatten().unsqueeze(1)
 
-        # print("predictions")
-        # print(predictions)
+        loss_func = torch.nn.BCEWithLogitsLoss(reduction = 'mean', weight=weight_tensor) #weight=weights
+        #loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
+         # loss_list = [loss_func(predictions, targets)]   
+        print("predictions *******")
+        predictions = predictions.flatten().unsqueeze(1)
+        print(predictions.flatten())
         # print("targets")
-        # print(targets)
-        loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
-
+        targets  = targets.unsqueeze(1)
+        # print(targets.flatten())
+        loss_list = [loss_func(predictions, targets)]   
         
         # assumes that order of entries in predictions
         # matches order of entries in targets; could be unsafe
         #for i,(k,v) in enumerate(predictions.items()):
            #loss_list.append(loss_func(v, targets[:,i]))
-        loss_list = [loss_func(predictions, targets)]
+        
         # print("list")
         # print(loss_list)
 

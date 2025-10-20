@@ -26,10 +26,14 @@ import torch.nn.functional as F
 from phyddle import utilities as util
 from phyddle import network
 from torch_geometric.data import Data as GeoData
-from torch_geometric.loader import DataLoader as GeoLoader
+#from torch_geometric.loader import DataLoader as GeoLoader
+from torch.utils.data import DataLoader
 from torch_geometric.utils import to_torch_coo_tensor
+from torch_geometric.data import Batch
+
 
 torch.cuda.empty_cache()
+torch.cuda.set_per_process_memory_fraction(0.8, device=0)
 
 ##################################################
 
@@ -54,6 +58,43 @@ def load(args):
     
 ##################################################
 
+  # https://medium.com/@piyushkashyap045/how-to-save-and-load-checkpoints-for-training-a-cnn-with-pytorch-e17395cdbd3d
+def save_checkpoint(state, filename="train/checkpoint.tar"):
+    print("Saving checkpoint")
+    torch.save(state, filename)
+
+def load_checkpoint(checkpoint, model, optimizer):
+    print("Loading checkpoint")
+    model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+##################################################
+
+
+def custom_collate(batch):
+    #print(">>> ENTERED CUSTOM COLLATE <<<", flush=True)
+    phy, graphs, aux, idx, lbl_num, lbl_cat = zip(*batch)
+    # print("Collating batch!")
+    # for i, g in enumerate(graphs):
+    #         print(f"Graph {i}:")
+    #         if hasattr(g, "x"):
+    #             print(f"  x shape: {None if g.x is None else tuple(g.x.shape)}")
+    #         if hasattr(g, "edge_index"):
+    #             print(f"  edge_index shape: {None if g.edge_index is None else tuple(g.edge_index.shape)}")
+    #         if hasattr(g, "edge_attr"):
+    #             print(f"  edge_attr shape: {None if g.edge_attr is None else tuple(g.edge_attr.shape)}")
+    #         if hasattr(g, "batch"):
+    #             print(f"  batch shape: {None if g.batch is None else tuple(g.batch.shape)}")
+    #         print("  keys:", g.keys)
+    graphs = Batch.from_data_list(graphs)
+    return (
+        torch.stack(phy), 
+        graphs, 
+        torch.stack(aux),
+        torch.stack(idx),
+        torch.stack(lbl_num),
+        torch.stack(lbl_cat)
+    )
 
 class Trainer:
     """
@@ -108,6 +149,9 @@ class Trainer:
         self.prop_cal           = float(args['prop_cal'])
         self.prop_val           = float(args['prop_val'])
         self.num_epochs         = int(args['num_epochs'])
+        self.load_model         =bool(args['load_model'])
+        self.phylo_pool         =bool(args['phylo_pool'])
+        self.graph_conv         =bool(args['graph_conv'])
         self.trn_batch_size     = int(args['trn_batch_size'])
         self.cpi_coverage       = float(args['cpi_coverage'])
         self.cpi_asymmetric     = bool(args['cpi_asymmetric'])
@@ -256,7 +300,7 @@ class CnnTrainer(Trainer):
         # initialize base class
         super().__init__(args)
         
-        self.num_classes=2
+        self.num_classes=1
         self.aux_data_names = list()    # init with load_input()
         self.label_names    = list()    # init with load_input()
         self.num_aux_data   = int()     # init with load_input()
@@ -421,7 +465,13 @@ class CnnTrainer(Trainer):
         #full_node_attributes = [([[np.diag(y) for y in x]  for x in full_nodes_dist ])]
 
         # separate labels for categorical param_est targets
+        # print("full labels")
+        # print(full_labels)
         full_labels_num, full_labels_cat = self.separate_labels(full_labels)
+        # print("full_labels_cat")
+        # print(full_labels_cat)
+        # print("full_labels_num")
+        # print(full_labels_num)
         
         # data dimensions
         num_sample             = full_phy_data.shape[0]
@@ -434,14 +484,21 @@ class CnnTrainer(Trainer):
         print("randomized idx")
         print(randomized_idx)
         unique_ids = np.unique(full_graph_ids)
+        #for (unique_id in unique_ids):
+
         cumulative_edges = np.insert(np.cumsum(full_num_edges), 0, 0).astype(int)
         cumulative_nodes = np.insert(np.cumsum(full_num_nodes), 0, 0).astype(int)
-
+        print("cumulative edges")
+        print(cumulative_edges)
+        print("cumulative nodes")
+        print(cumulative_nodes)
         split_edges = np.split(full_edges_matrix, cumulative_edges[1:])
+
         joined_edges = np.concatenate([split_edges[x] for x in randomized_idx])
         split_nodes = np.split(full_node_attributes, cumulative_nodes[1:])
         joined_nodes = np.concatenate([split_nodes[x] for x in randomized_idx])
-
+        full_num_nodes = full_num_nodes[randomized_idx]
+        full_num_edges = full_num_edges[randomized_idx]
         full_phy_data      = full_phy_data[randomized_idx,:]
         full_node_attributes = joined_nodes
         full_edges_matrix = joined_edges
@@ -449,6 +506,7 @@ class CnnTrainer(Trainer):
         full_labels_num    = full_labels_num[randomized_idx,:]
         full_labels_cat    = full_labels_cat[randomized_idx,:]
         full_idx_data      = full_idx_data[randomized_idx]
+        full_ids      = unique_ids[randomized_idx]
         # reshape phylogenetic tensor data based on CPV+S
         full_phy_data.shape = (num_sample, -1, self.num_data_col)
 
@@ -499,8 +557,6 @@ class CnnTrainer(Trainer):
         val_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx])
         calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
 
-        print("train node attr tensor 0")
-        print(train_node_attr_tensor[0])
 
         train_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in train_idx]))
         val_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in val_idx]))
@@ -512,31 +568,43 @@ class CnnTrainer(Trainer):
         train_labels_cat = full_labels_cat[train_idx,:]
         val_labels_cat = full_labels_cat[val_idx,:]
         calib_labels_cat = full_labels_cat[calib_idx,:]
-        
+        calib_ids = full_ids[calib_idx]
+        val_ids = full_ids[val_idx]
+
         # create index tensors
         train_idx_tensor = full_idx_data[train_idx,:]
         val_idx_tensor = full_idx_data[val_idx,:]
         calib_idx_tensor = full_idx_data[calib_idx,:]
+        train_ids = full_ids[train_idx]
+        train_num_nodes = full_num_nodes[train_idx]
+        train_num_edges = full_num_edges[train_idx]
+        calib_num_nodes = full_num_nodes[calib_idx]
+        calib_num_edges = full_num_edges[calib_idx]
+        val_num_nodes = full_num_nodes[val_idx]
+        val_num_edges = full_num_edges[val_idx]
+        print("ids:")
+        print("train:", train_ids)
+        print("val:", val_ids)
+        print("calib:", calib_ids)
+
 
         # torch datasets
         self.train_dataset = network.Dataset(train_phy_data_tensor, train_node_attr_tensor,
                                              train_edges_tensor, norm_train_aux_data,
                                              train_idx_tensor,
                                              norm_train_labels_num,
-                                             train_labels_cat)
+                                             train_labels_cat, train_ids, train_num_nodes, train_num_edges)
         self.calib_dataset = network.Dataset(self.calib_phy_data_tensor, calib_node_attr_tensor,
                                              calib_edges_tensor, norm_calib_aux_data,
                                              calib_idx_tensor,
                                              self.norm_calib_labels_num,
-                                             calib_labels_cat)
+                                             calib_labels_cat, calib_ids, calib_num_nodes, calib_num_edges)
         self.val_dataset   = network.Dataset(val_phy_data_tensor, val_node_attr_tensor,
                                              val_edges_tensor, norm_val_aux_data,
                                              val_idx_tensor,
                                              norm_val_labels_num,
-                                             val_labels_cat)
+                                             val_labels_cat, val_ids, val_num_nodes, val_num_edges)
         return
-    
-##################################################
 
     def separate_labels(self, labels):
         """Separates labels for categorical param_est targets.
@@ -560,8 +628,10 @@ class CnnTrainer(Trainer):
             if v == 'cat':
                 self.has_label_cat = True
                 idx = self.label_names.index(k)
+                print("np.unique")
                 unique_cats, encoded_cats = np.unique(labels[:,idx],
                                                       return_inverse=True)
+                print(unique_cats)
                 self.param_cat[k] = len(unique_cats)
                 labels[:,idx] = encoded_cats
                 idx_cat.append( idx )
@@ -577,6 +647,8 @@ class CnnTrainer(Trainer):
             util.print_err(f"No training labels found.", exit=True)
                
         # get data subsets
+        print("idx cat")
+        print(idx_cat)
         labels_num = labels[:,idx_num].copy()
         labels_cat = labels[:,idx_cat].copy()
 
@@ -599,6 +671,8 @@ class CnnTrainer(Trainer):
                                                         aux_dat_width=self.num_aux_data,
                                                         lbl_width=self.num_param_num,
                                                         param_cat=self.param_cat,
+                                                        phylo_pool = self.phylo_pool,
+                                                        graph_conv = self.graph_conv,
                                                         args=self.args)
         
         self.model.phy_dat_shape = (self.num_data_col, self.tree_width)
@@ -647,19 +721,26 @@ class CnnTrainer(Trainer):
 
         """
         # training dataset
-        train_loader = GeoLoader(dataset=self.train_dataset,
-                                                   batch_size=self.trn_batch_size)
-        val_loader = GeoLoader(dataset=self.val_dataset,
-                                                   batch_size=self.trn_batch_size)
+        train_loader = DataLoader(dataset=self.train_dataset,
+                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)
+        val_loader = DataLoader(dataset=self.val_dataset,
+                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)
+
         print("training batch size: ", str(self.trn_batch_size))
         num_batches = int(np.ceil(self.train_dataset.phy_data.shape[0] / self.trn_batch_size))
         val_num_batches = int(np.ceil(self.val_dataset.phy_data.shape[0] / self.trn_batch_size))
         calib_num_batches = int(np.ceil(self.calib_dataset.phy_data.shape[0] / self.trn_batch_size))
 
         print("number of batches: " + str(num_batches))
+        # for data in train_loader:
+        #     print(f"Batch assignment: {data.batch}")  # Should be [0,0,...,1,1,...,2,2,...]
+        #     print(f"Unique batch IDs: {data.batch.unique()}")  # Should match number of graphs
+        #     break
+        # for data in val_loader:
+        #     print(f"Val Batch assignment: {data.batch}")  # Should be [0,0,...,1,1,...,2,2,...]
+        #     print(f"Val Unique batch IDs: {data.batch.unique()}")  # Should match number of graphs
+        #     break
 
-        for step, data in enumerate(train_loader):
-            print(f'Training step {step + 1}:')
             # print(data)
             # print()
 
@@ -672,7 +753,8 @@ class CnnTrainer(Trainer):
         val_lbl_cat  = torch.Tensor(self.val_dataset.labels_cat).to(self.TORCH_DEVICE)
         # print("VALIDATION GRAPH DATA")
         # print(self.val_dataset.graph_data)
-        val_graph_dat = self.val_dataset.graph_data.to(self.TORCH_DEVICE)
+        #val_graph_dat = self.val_dataset.graph_dat.to(self.TORCH_DEVICE)
+        val_graph_dat = [self.val_dataset.graph_dat[i].to(self.TORCH_DEVICE) for i in range(len(self.val_dataset.graph_dat))]
         val_bad_count = 0
 
         #print("val_node_data")
@@ -723,6 +805,8 @@ class CnnTrainer(Trainer):
         #                                             step_size = 50,
         #                                             gamma = 0.1)
         
+
+
         # TODO: simplify training logging!!
         # gather training history
         history_col_names = ['epoch', 'dataset', 'metric', 'value']
@@ -733,6 +817,20 @@ class CnnTrainer(Trainer):
                         'loss_combined', 'mse_value', 'mae_value', 'medape_value', 'accuracy_combined']
         prev_trn_loss_combined = None
         prev_val_loss_combined = None
+        prev_trn_acc_combined = None
+        prev_val_acc_combined = None
+
+        #checkpointing code from https://medium.com/@piyushkashyap045/how-to-save-and-load-checkpoints-for-training-a-cnn-with-pytorch-e17395cdbd3d
+        if self.load_model:
+            checkpoint = torch.load(f'{self.trn_dir}'+"/checkpoint.tar")
+            load_checkpoint(checkpoint, self.model, optimizer)
+            print("Model's state_dict:")
+            for param_tensor in self.model.state_dict():
+                print(param_tensor, "\t", self.model.state_dict()[param_tensor].size())
+            print("Optimizer's state_dict:")
+            for var_name in optimizer.state_dict():
+                print(var_name, "\t", optimizer.state_dict()[var_name])
+
         for i in range(self.num_epochs):
             # print('-----')
             trn_loss_value = 0.
@@ -747,14 +845,22 @@ class CnnTrainer(Trainer):
             train_msg = f'Training epoch {i+1} of {self.num_epochs}'
             correct = 0
             total_graphs = 0
+            self.model.train()
+            accumulation_steps = 1
+
+
             for j, (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
                                                                  total=num_batches,
                                                                  desc=train_msg,
                                                                  smoothing=0):
+                                         
                 
                 # short cut batches for training
                 # if j > 1:
                 #     break
+
+                # print("lbl_cat")
+                # print(lbl_cat)
                 
                 # send labels to device
                 phy_dat = phy_dat.to(self.TORCH_DEVICE)
@@ -765,18 +871,28 @@ class CnnTrainer(Trainer):
                 graph_dat = graph_dat.to(self.TORCH_DEVICE)
 
 
-                # reset gradients for tensors
-                optimizer.zero_grad()
+
                 # forward pass of training data to estimate labels
 
                 lbls_hat = self.model(phy_dat, graph_dat, aux_dat)
 
+                # print("params")
+                # for name, p in self.model.named_parameters():
+                #     print(name, p)
+                #     if p.grad is not None:
+                #         print(name, p.grad.abs().max())
+                # if i > 2:
+                #     quit()
                 third_arg = lbls_hat[3] # [0:int(len(lbls_hat[3])/4)]
                 preds = third_arg #.long()
-                correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
-                total_graphs = total_graphs + len(lbl_cat.flatten())
-
-
+                # print(f"Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
+                # print(f"Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
+                # print(f"Unique values: {torch.unique(third_arg).numel()}")
+                # correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
+                # total_graphs = total_graphs + len(lbl_cat.flatten())
+                #if j == 1:
+                # print("most recent out:")
+                # print(preds.flatten())
                 loss_list = list()
                 if self.has_label_num:
                     loss_value = loss_value_func(lbls_hat[0], lbl_num)
@@ -784,8 +900,13 @@ class CnnTrainer(Trainer):
                     loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
                     loss_list += [ loss_value, loss_lower, loss_upper ]
                 if self.has_label_cat:
-                    loss_categ = loss_categ_func(preds, lbl_cat)
-                    acc_categ = int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())/len(lbl_cat)
+                    loss_categ = loss_categ_func(preds, lbl_cat.flatten())
+                    # print("preds")
+                    p = torch.sigmoid(preds)
+                    predicted_class = (p >= 0.5).long()
+                    # print(predicted_class.flatten()) 
+                    # print("truth:", lbl_cat.flatten())
+                    acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat)
                     loss_list += [ loss_categ ]
                 # loss_combined = torch.stack(loss_list).sum()
                 
@@ -804,27 +925,31 @@ class CnnTrainer(Trainer):
                     trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
                     trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
                 trn_loss_combined += loss_combined.item() / num_batches
-                trn_acc_combined += acc_categ
+                trn_acc_combined += acc_categ / num_batches
                 
                 # backward pass to update gradients
                 #loss_combined.requires_grad = True #KT
                 loss_combined.backward()
 
-                self.model.train()
+                # self.model.train()
                 # update network parameters
-                optimizer.step()
+                if ((j + 1) % accumulation_steps == 0 or (j + 1) == num_batches):
+                    #print("updating optimizer")
+                    optimizer.step()
+
+                    # reset gradients for tensors
+                    optimizer.zero_grad()
                 # lr_scheduler.step()
-            acc = correct/(total_graphs)
-            print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
+            
+
             train_metric_vals = [ trn_loss_lower, trn_loss_upper, trn_loss_value,
                                   trn_loss_combined, trn_mse_value,
                                   trn_mae_value, trn_mape_value, trn_acc_combined ]
 
 
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t'
-            trn_loss_str += f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
+            trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
 
-            print(trn_loss_str)
 
             self.model.eval()
             with torch.no_grad():
@@ -840,6 +965,8 @@ class CnnTrainer(Trainer):
                     val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
                     val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
                     val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
+                    # print("VALIDATION GRAPH DATA")
+                    # print(val_graph_dat)
                     val_graph_dat = val_graph_dat.to(self.TORCH_DEVICE)
 
                     # reset gradients for tensors
@@ -849,16 +976,23 @@ class CnnTrainer(Trainer):
 
                     # # forward pass of validation to estimate labels
                     val_lbls_hat       = self.model(val_phy_dat, val_graph_dat, val_aux_dat)
+
+
                     #print("val lbls hat 3")
                     #print(val_lbls_hat[3])
                     third_arg = val_lbls_hat[3]#[0:int(len(lbls_hat[3])/4)]
+                    # print(" val out:")
+                    # print(third_arg.flatten())
+                    # print(f"Val Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
+                    # print(f"Val Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
+                    # print(f"Val Unique values: {torch.unique(third_arg).numel()}")
                     # collect validation metrics
                     val_loss_list = list()
                     val_loss_value = 0.
                     val_loss_lower = 0.
                     val_loss_upper = 0.
-                    correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
-                    total_graphs = total_graphs + len(val_lbl_cat.flatten())
+                    # correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
+                    # total_graphs = total_graphs + len(val_lbl_cat.flatten())
 
                     if self.has_label_num:
                         val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
@@ -867,9 +1001,14 @@ class CnnTrainer(Trainer):
                         val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
                     # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
                     if self.has_label_cat:
-                        val_loss_categ = loss_categ_func(third_arg, val_lbl_cat).item()
+                        val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten()).item()
                         val_loss_list += [ val_loss_categ ]
-                    
+                        p = torch.sigmoid(third_arg)
+                        predicted_class = (p >= 0.5).long()
+                        # print(predicted_class.flatten()) 
+                        # print("truth:", lbl_cat.flatten())
+                        val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat)
+
                     # val_loss_combined = sum(val_loss_list)
                     if loss_aggregation == 'sum':
                         # val_loss_combined = torch.stack(val_loss_list).sum()
@@ -891,11 +1030,13 @@ class CnnTrainer(Trainer):
                         
                     val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
                                         val_loss_combined, val_mse_value, val_mae_value,
-                                        val_mape_value ]
-                acc = correct/(total_graphs)
-                print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
+                                        val_mape_value, val_acc_combined ]
+                # acc = correct/(total_graphs)
+                # print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
             # raw training metrics for epoch
-            val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)} --   acc: {"{0:.4f}".format(val_acc_combined)}'
+            val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
+            val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
+
             
             # changes in training metrics between epochs
             if i > 0:
@@ -908,7 +1049,7 @@ class CnnTrainer(Trainer):
                 else:
                     rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
                 if (prev_val_loss_combined == 0):
-                    rat_trn_loss = 100
+                    rat_val_loss = 100
                 else:
                     rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
                 if (prev_trn_acc_combined == 0):
@@ -916,7 +1057,7 @@ class CnnTrainer(Trainer):
                 else:
                     rat_trn_acc  = 100 * round(trn_acc_combined / prev_trn_acc_combined - 1.0, ndigits=4)
                 if (prev_val_acc_combined == 0):
-                    rat_trn_acc = 100
+                    rat_val_acc = 100
                 else:
                     rat_val_acc  = 100 * round(val_acc_combined / prev_val_acc_combined - 1.0, ndigits=4)
                 
@@ -958,13 +1099,20 @@ class CnnTrainer(Trainer):
             prev_trn_acc_combined = trn_acc_combined
             prev_val_acc_combined = val_acc_combined
             # display training metric progress
-            print(val_loss_str)
+            print(trn_loss_str, trn_acc_str)
+            print("")
+            print(val_loss_str, val_acc_str)
             print('')
 
             # update train history log
             self.update_train_history(i, metric_names, train_metric_vals, 'train')
             self.update_train_history(i, metric_names, val_metric_vals, 'validation')
 
+            checkpoint = {'state_dict': self.model.state_dict(),
+                            'optimizer': optimizer.state_dict(),}
+            save_checkpoint(checkpoint, filename=f'{self.trn_dir}'+"/checkpoint.tar")
+
+      
             # early stopping
             if val_bad_count >= self.num_early_stop and self.num_early_stop > 0:
                 print(f'Early stop: validation loss increased for num_early_stop={self.num_early_stop} consecutive epochs')
@@ -1008,15 +1156,14 @@ class CnnTrainer(Trainer):
         # make initial CPI estimates
         num_calib_examples = self.calib_phy_data_tensor.shape[0]
 
-        calib_loader = GeoLoader(dataset=self.calib_dataset,
-                                                   batch_size=self.trn_batch_size)#num_calib_examples)
+        calib_loader = DataLoader(dataset=self.calib_dataset,
+                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_calib_examples)
 
         for step, data in enumerate(calib_loader):
             print(f'Calib step {step + 1}:')
             print()
-            quit()
         calib_batch = next(iter(calib_loader))
-        third_arg = calib_batch[3][0:int(len(calib_batch[3])/4)]
+        third_arg = calib_batch[3]
         calib_phy_dat, calib_graph_dat, calib_aux_dat = calib_batch[0], calib_batch[1], calib_batch[2], third_arg
         # calib_phy_dat = calib_phy_dat.to('cpu')
         # calib_aux_dat = calib_aux_dat.to('cpu')
@@ -1053,8 +1200,8 @@ class CnnTrainer(Trainer):
         # get uncalibrated estimates
         # training label estimates
         num_train_examples = 1000
-        train_loader = GeoLoader(dataset=self.train_dataset,
-                                                   batch_size=self.trn_batch_size)#num_train_examples)
+        train_loader = DataLoader(dataset=self.train_dataset,
+                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_train_examples)
 
         for step, data in enumerate(train_loader):
             print(f'Train step {step + 1}:')
@@ -1082,7 +1229,6 @@ class CnnTrainer(Trainer):
         labels_num_est = label_est[0:3]
         labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
         labels_cat_est = label_est[3]
-        #labels_cat_est = labels_cat_est[3][0:int(len(labels_cat_est[3])/4)]
 
 
         if self.has_label_num:
@@ -1161,21 +1307,21 @@ class CnnTrainer(Trainer):
         path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
         
         # output network model info
-        model_arch_fn                = f'{path_prefix}.trained_model.pkl'
-        model_history_fn             = f'{path_prefix}.train_history.csv'
-        model_cpi_fn                 = f'{path_prefix}.cpi_adjustments.csv'
+        model_arch_fn                = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        model_history_fn             = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
+        model_cpi_fn                 = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.cpi_adjustments.csv'
         # model_weights_fn           = f'{path_prefix}.train_weights.hdf5'
         
         # output scaling terms
-        train_labels_num_norm_fn    = f'{path_prefix}.train_norm.labels_num.csv'
-        train_aux_data_norm_fn       = f'{path_prefix}.train_norm.aux_data.csv'
+        train_labels_num_norm_fn    = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.labels_num.csv'
+        train_aux_data_norm_fn       = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.aux_data.csv'
 
         # output training labels
-        train_label_num_true_fn     = f'{path_prefix}.train_true.labels_num.csv'
-        train_label_num_est_fn      = f'{path_prefix}.train_est.labels_num.csv'
-        train_label_est_nocalib_fn   = f'{path_prefix}.train_est.labels_num_nocalib.csv'
-        train_label_cat_true_fn      = f'{path_prefix}.train_true.labels_cat.csv'
-        train_label_cat_est_fn       = f'{path_prefix}.train_est.labels_cat.csv'
+        train_label_num_true_fn     = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
+        train_label_num_est_fn      = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
+        train_label_est_nocalib_fn   = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num_nocalib.csv'
+        train_label_cat_true_fn      = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
+        train_label_cat_est_fn       = f'{path_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
         
         # save model to file
         torch.save(self.model, model_arch_fn)

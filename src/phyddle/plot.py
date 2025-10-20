@@ -93,6 +93,11 @@ class Plotter:
         self.est_dir = str(args['est_dir'])
         self.plt_dir = str(args['plt_dir'])
         self.log_dir = str(args['log_dir'])
+        
+        self.phylo_pool         =bool(args['phylo_pool'])
+        self.graph_conv         =bool(args['graph_conv'])
+
+        self.learning_rate      = float(args['learning_rate'])
 
         # dataset info
         self.tensor_format = str(args['tensor_format'])
@@ -128,13 +133,15 @@ class Plotter:
         self.train_hdf5_fn = f'{fmt_proj_prefix}.train.hdf5'
         self.train_phy_data_fn = f'{fmt_proj_prefix}.train.phy_data.csv'
         self.train_aux_data_fn = f'{fmt_proj_prefix}.train.aux_data.csv'
+
+        print(self.train_aux_data_fn)
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
-        self.train_est_num_fn = f'{trn_proj_prefix}.train_est.labels_num.csv'
-        self.train_true_num_fn = f'{trn_proj_prefix}.train_true.labels_num.csv'
-        self.train_est_cat_fn = f'{trn_proj_prefix}.train_est.labels_cat.csv'
-        self.train_true_cat_fn = f'{trn_proj_prefix}.train_true.labels_cat.csv'
+        self.train_est_num_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
+        self.train_true_num_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
+        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
+        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
 
         # test dataset tensors
         self.test_est_num_fn = f'{est_proj_prefix}.test_est.labels_num.csv'
@@ -150,8 +157,8 @@ class Plotter:
         self.emp_est_cat_fn = f'{est_proj_prefix}.empirical_est.labels_cat.csv'
 
         # network
-        self.model_arch_fn = f'{trn_proj_prefix}.trained_model.pkl'
-        self.history_fn = f'{trn_proj_prefix}.train_history.csv'
+        self.model_arch_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        self.history_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
 
         # new empirical plot
         self.save_cpi_est_fn = f'{plt_proj_prefix}.empirical_estimate'
@@ -466,7 +473,7 @@ class Plotter:
         self.make_plot_train_history()
 
         # network architecture
-        self.make_plot_network_architecture()
+       #self.make_plot_network_architecture()
         
         # done
         return
