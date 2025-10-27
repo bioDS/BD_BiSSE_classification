@@ -66,21 +66,20 @@ class GCN_PhyloPool(torch.nn.Module):
         torch.manual_seed(12345)
         self.n_parts = 10
         ker_size = 5
-        self.gconv1 = GraphConv(num_node_features, hidden_channels) #GCNConv
-        self.gconv2 = GraphConv(hidden_channels, hidden_channels)
-        self.gconv3 = GraphConv(hidden_channels, hidden_channels)
+        self.gconv1 = GCNConv(num_node_features, hidden_channels) #GCNConv
+        self.gconv2 = GCNConv(hidden_channels, hidden_channels)
         self.conv1 = nn.Conv1d(hidden_channels, 2*hidden_channels, kernel_size=ker_size)
         self.conv2= nn.Conv1d(2*hidden_channels, 4*hidden_channels, kernel_size=ker_size)
         self.conv3= nn.Conv1d(4*hidden_channels, 8*hidden_channels, kernel_size=ker_size)
-        self.message_passing_layers = nn.ModuleList()
-        self.message_passing_layers.append(self.gconv1)
-        self.message_passing_layers.append(self.gconv2)
-        self.message_passing_layers.append(self.gconv3)
+        # self.message_passing_layers = nn.ModuleList()
+        # self.message_passing_layers.append(self.gconv1)
+        # self.message_passing_layers.append(self.gconv2)
+        # self.message_passing_layers.append(self.gconv3)
 
-        self.bn1 = BatchNorm(hidden_channels)
-        self.bn2 = BatchNorm(hidden_channels)
-        self.bn3 = BatchNorm(hidden_channels)
-        self.bn4 = BatchNorm(2*hidden_channels)
+        # self.bn1 = BatchNorm(hidden_channels)
+        # self.bn2 = BatchNorm(hidden_channels)
+        # self.bn3 = BatchNorm(hidden_channels)
+        # self.bn4 = BatchNorm(2*hidden_channels)
 
         self.lin1 = nn.Linear(8*hidden_channels*self.n_parts, out_features = 100)
         self.lin2 = nn.Linear(100, num_classes)
@@ -93,62 +92,66 @@ class GCN_PhyloPool(torch.nn.Module):
         self.TORCH_DEVICE = torch.device(self.TORCH_DEVICE_STR)
 
     def forward(self, x, edge_index, batch):
-        if batch is None:
-                batch = x.new_zeros(x.size(0), dtype=torch.long)
+        x = x.to(self.TORCH_DEVICE)
+        edge_index = edge_index.to(self.TORCH_DEVICE)
         batch = batch.to(self.TORCH_DEVICE)
         batch_size = batch.max().item() + 1
-        edge_index = edge_index.to(self.TORCH_DEVICE)
+        x = self.gconv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.01, training=self.training)
+        x = self.gconv2(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.01, training=self.training)
 
-        x = x.to(self.TORCH_DEVICE)
-        for mp_layer in self.message_passing_layers:
-            x = mp_layer(x, edge_index)
-            x = F.relu(x)
-            x = F.dropout(x, p=0.001, training=self.training)
-            # 1. Obtain node embeddings 
-            
-            x, num_nodes = to_dense_batch(x, batch)
-            x_padded = x.permute(0,2,1)
+        x, num_nodes = to_dense_batch(x, batch)
+        x_padded = x.permute(0,2,1)
+        x_padded = self.conv1(x_padded)
+        x_padded = F.relu(x_padded)
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training)
+        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
+        
+        x_padded = self.conv2(x_padded)
+        x_padded = F.relu(x_padded)
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training)
+        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
 
-            x_padded = F.relu(self.conv1(x_padded))
-            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
-            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
+        x_padded = self.conv3(x_padded)
+        x_padded = F.relu(x_padded)
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training)   
+        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
+     
 
-            x_padded = F.relu(self.conv2(x_padded))
-            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
-            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
 
-            x_padded = F.relu(self.conv3(x_padded))
-            x_padded = F.dropout(x_padded, p=0.001, training=self.training)
-            x_padded = F.avg_pool1d(x_padded, kernel_size=2)
+        x = F.dropout(x, p=0.01, training=self.training)
+        valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
+        selected_nodes_list = []
+        for i, valid in enumerate (valid_nodes):
+            valid_indices = torch.arange(valid) # Generate valid node indices
+            base_size = valid // self.n_parts # Base size of each part
+            remainder = valid % self.n_parts # Number of remaining indices to distribute
 
-            valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
-            selected_nodes_list = []
-            for i, valid in enumerate (valid_nodes):
-                valid_indices = torch.arange(valid) # Generate valid node indices
-                base_size = valid // self.n_parts # Base size of each part
-                remainder = valid % self.n_parts # Number of remaining indices to distribute
+            # Calculate the sizes of the parts
+            part_sizes = [base_size + 1 if j < remainder else base_size for j in range(self.n_parts)]
+            part_means = []
+            start_idx = 0
 
-                # Calculate the sizes of the parts
-                part_sizes = [base_size + 1 if j < remainder else base_size for j in range(self.n_parts)]
-                part_means = []
-                start_idx = 0
+            for part_size in part_sizes:
+                end_idx = start_idx + part_size
+                part_indices = valid_indices[start_idx:end_idx]
+                start_idx = end_idx
+                part_mean = x_padded[i, :, part_indices].mean(dim=1)
+                part_means.append(part_mean)
+            selected_nodes_list.append(torch.stack(part_means))
+        
+        selected_nodes = torch.stack(selected_nodes_list)
+        selected_nodes = selected_nodes.permute(0,2,1)
+        selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
+        out = F.relu(self.lin1(selected_nodes_flattened))
+        out = F.dropout(out, p=0.001, training=self.training)
+        out = self.lin2(out)
 
-                for part_size in part_sizes:
-                    end_idx = start_idx + part_size
-                    part_indices = valid_indices[start_idx:end_idx]
-                    start_idx = end_idx
-                    part_mean = x_padded[i, :, part_indices].mean(dim=1)
-                    part_means.append(part_mean)
-                selected_nodes_list.append(torch.stack(part_means))
-            
-            selected_nodes = torch.stack(selected_nodes_list)
-            selected_nodes = selected_nodes.permute(0,2,1)
-            selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
-            out = F.relu(self.lin1(selected_nodes_flattened))
-            out = F.dropout(out, p=0.001, training=self.training)
-            out = self.lin2(out)
-            # print("returning", out)
-            return out
+
+        return out
 
 # https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
 class GCN(torch.nn.Module):
@@ -160,8 +163,8 @@ class GCN(torch.nn.Module):
             self.conv1 = GraphConv(num_node_features, hidden_channels) #GCNConv # GraphConv
             self.conv2 = GraphConv(hidden_channels, hidden_channels)
             self.conv3 = GraphConv(hidden_channels, hidden_channels)
-            self.conv4 = GraphConv(hidden_channels, hidden_channels)
-            self.conv5 = GraphConv(hidden_channels, 2*hidden_channels)
+            #self.conv4 = GraphConv(hidden_channels, hidden_channels)
+            #self.conv5 = GraphConv(hidden_channels, 2*hidden_channels)
         else:
         #     self.conv1 = GCNConv(num_node_features, hidden_channels) #GCNConv # GraphConv
         #     self.conv2 = GCNConv(hidden_channels, hidden_channels)
@@ -180,7 +183,7 @@ class GCN(torch.nn.Module):
             self.conv1 = GCNConv(num_node_features, hidden_channels)
             self.conv2 = GCNConv(hidden_channels, hidden_channels)
             self.conv3 = GCNConv(hidden_channels, hidden_channels)
-            self.lin = nn.Linear(hidden_channels, num_classes)
+        self.lin = nn.Linear(hidden_channels, num_classes)
 
 
         self.TORCH_DEVICE_STR = (
@@ -234,9 +237,7 @@ class GCN(torch.nn.Module):
         #print(x)
 
         # 3. Apply a final classifier
-        x = F.dropout(x, p=0.5, training=self.training)
-        #print("after dropout")
-        #print(x)
+        x = F.dropout(x, p=0.2, training=self.training)
         x = self.lin(x)
 
 
@@ -287,15 +288,19 @@ class Dataset(Geoset):
             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
         
             #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
-            self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))
+            self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
             prev_edge_ind = current_edge_ind
             prev_node_ind = current_node_ind
+        # print("self graph dat")
+        # print(self.graph_dat)
 
     # Getting the data
     def __getitem__(self, index):
         #print("getting graph  index", str(index), ":",self.graph_dat[index] )
-        return (self.phy_data[index], self.graph_dat[index], #[index],
-                self.aux_data[index], self.idx_data[index],
+        #return (#self.phy_data[index], self.graph_dat[index], #[index],
+                #self.aux_data[index], self.idx_data[index],
+                #self.labels_num[index], self.labels_cat[index])
+        return(self.graph_dat[index], self.idx_data[index],
                 self.labels_num[index], self.labels_cat[index])
     
     # Getting length of the data
@@ -500,9 +505,7 @@ class ParameterEstimationNetwork(nn.Module):
 
     def _initialize_weights(self):
         """Initializes weights for network."""
-        print("module types")
         for m in self.modules():
-            print(type(m))
             if isinstance(m, torch.nn.Linear):
                 torch.nn.init.kaiming_uniform_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
                 torch.nn.init.constant_(m.bias, 0)
@@ -510,53 +513,54 @@ class ParameterEstimationNetwork(nn.Module):
                 torch.nn.init.kaiming_uniform_(m.weight, a=0, mode='fan_in', nonlinearity='relu')
                 torch.nn.init.constant_(m.bias, 0)
             if isinstance(m, GraphConv):
-                torch.nn.init.xavier_uniform_(m.lin.weight)
-                torch.nn.init.constant_(m.bias, 0)
+                torch.nn.init.xavier_uniform_(m.lin_rel.weight)
+                torch.nn.init.xavier_uniform_(m.lin_root.weight)
+                torch.nn.init.constant_(m.lin_rel.bias, 0)
             if isinstance(m, GCNConv):
                 torch.nn.init.xavier_uniform_(m.lin.weight)
                 torch.nn.init.constant_(m.bias, 0)
         return
 
-    def forward(self, phy_dat, graph_dat, aux_dat):
+    def forward(self, graph_dat): # forward(self, phy_dat, graph_dat, aux_dat):
         """Forward-pass function of input through network to output labels."""
         
         # Phylogenetic Tensor forwarding
-        num_sample = phy_dat.shape[0]
+        num_sample = 500 # phy_dat.shape[0]
 
         # MJL: Does this need to be set? Seems like no.
         # phy_dat.requires_grad = True
         # aux_dat.requires_grad = True
         
-        if self.network_type == "CNN" or self.network_type == None:
-            # standard conv + pool layers
-            x_std = phy_dat
-            for i in range(len(self.phy_std)-1):
-                # AMT: Segfault when using Tesla T4 GPU. Occures on next line, second pass of the loop 
-                x_std = self.fwd_func(self.phy_std[i](x_std))
-            x_std = self.phy_std[-1](x_std)
+        # if self.network_type == "CNN" or self.network_type == None:
+        #     # standard conv + pool layers
+        #     x_std = phy_dat
+        #     for i in range(len(self.phy_std)-1):
+        #         # AMT: Segfault when using Tesla T4 GPU. Occures on next line, second pass of the loop 
+        #         x_std = self.fwd_func(self.phy_std[i](x_std))
+        #     x_std = self.phy_std[-1](x_std)
         
-            # stride conv + pool layers
-            x_stride = phy_dat
-            for i in range(len(self.phy_stride)-1 ):
-                x_stride = self.fwd_func(self.phy_stride[i](x_stride))
-            x_stride = self.phy_stride[-1](x_stride)
+        #     # stride conv + pool layers
+        #     x_stride = phy_dat
+        #     for i in range(len(self.phy_stride)-1 ):
+        #         x_stride = self.fwd_func(self.phy_stride[i](x_stride))
+        #     x_stride = self.phy_stride[-1](x_stride)
         
-            # dilation conv + pool layers
-            x_dilate = phy_dat
-            for i in range(len(self.phy_dilate)-1):
-                x_dilate = self.fwd_func(self.phy_dilate[i](x_dilate))
-            x_dilate = self.phy_dilate[-1](x_dilate)
+        #     # dilation conv + pool layers
+        #     x_dilate = phy_dat
+        #     for i in range(len(self.phy_dilate)-1):
+        #         x_dilate = self.fwd_func(self.phy_dilate[i](x_dilate))
+        #     x_dilate = self.phy_dilate[-1](x_dilate)
         
-            # dense aux. dat layers
-            x_aux = aux_dat
-            for i in range(len(self.aux_ffnn)):
-                x_aux = self.fwd_func(self.aux_ffnn[i](x_aux))
-            x_aux = x_aux.unsqueeze(dim=2)
+        #     # dense aux. dat layers
+        #     x_aux = aux_dat
+        #     for i in range(len(self.aux_ffnn)):
+        #         x_aux = self.fwd_func(self.aux_ffnn[i](x_aux))
+        #     x_aux = x_aux.unsqueeze(dim=2)
 
-            # Concatenate phylo and aux layers
-            x_concat = torch.cat((x_std, x_stride, x_dilate, x_aux), dim=1).squeeze()
-        else:
-
+        #     # Concatenate phylo and aux layers
+        #     x_concat = torch.cat((x_std, x_stride, x_dilate, x_aux), dim=1).squeeze()
+        # else:
+        if True:
             # x_std = graph_dat
             # for i in range(len(self.phy_std)-1):
             #     x_std = self.fwd_func(self.phy_std[i](x_std.x))
@@ -671,28 +675,33 @@ class CrossEntropyLoss(nn.Module):
         """Simple quantile loss function for prediction intervals."""
         
         loss_list = []
-        targets = targets.flatten() #.long()
+        targets = targets.flatten().long() #.long()
         predictions = predictions.float()
         weights = 1 / torch.bincount(targets).float()
         weight_tensor = targets.clone().float()
         zero_indices = weight_tensor == 0
         one_indices =  weight_tensor == 1
-        weight_tensor[zero_indices] = weights[0]
-        weight_tensor[one_indices] = weights[1]
-        targets = targets.float()
-        weight_tensor = weight_tensor.flatten().unsqueeze(1)
-
-        loss_func = torch.nn.BCEWithLogitsLoss(reduction = 'mean', weight=weight_tensor) #weight=weights
-        #loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
-         # loss_list = [loss_func(predictions, targets)]   
-        print("predictions *******")
-        predictions = predictions.flatten().unsqueeze(1)
-        print(predictions.flatten())
-        # print("targets")
+        if len(zero_indices) == 0 or len(one_indices) == 0:
+            loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
+        else:
+            weight_tensor[zero_indices] = weights[0]
+            weight_tensor[one_indices] = weights[1]
+        #targets = targets.float()
+            weight_tensor = weight_tensor.flatten().unsqueeze(1)   
+            loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
+        #print("predictions *******")
+        ##predictions = predictions.flatten().unsqueeze(1) # needed for bcewithlogitloss
+        #print(predictions)
+        #print("targets")
         targets  = targets.unsqueeze(1)
-        # print(targets.flatten())
-        loss_list = [loss_func(predictions, targets)]   
-        
+        #print(targets.flatten())
+        loss_list = [loss_func(predictions, targets.flatten())]  
+
+        #loss_func = torch.nn.BCEWithLogitsLoss(reduction = 'mean', weight=weight_tensor) #weight=weights
+        #predictions = predictions.flatten().unsqueeze(1) # needed for bcewithlogitloss
+        #targets  = targets.unsqueeze(1)
+        #loss_list = [loss_func(predictions, targets)]  
+
         # assumes that order of entries in predictions
         # matches order of entries in targets; could be unsafe
         #for i,(k,v) in enumerate(predictions.items()):

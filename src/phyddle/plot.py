@@ -96,6 +96,8 @@ class Plotter:
         
         self.phylo_pool         =bool(args['phylo_pool'])
         self.graph_conv         =bool(args['graph_conv'])
+        self.phy_hidden_size = int(args['phy_hidden_size'])
+        self.optimizer          = str(args['optimizer'])
 
         self.learning_rate      = float(args['learning_rate'])
 
@@ -115,6 +117,9 @@ class Plotter:
         self.plot_min_emp = int(args['plot_min_emp'])
         self.plot_num_emp = int(args['plot_num_emp'])
         self.plot_pca_noise = float(args['plot_pca_noise'])
+
+        self.scheduler="CosineAnnealingLR"
+
 
         # phy data dimension
         self.tree_width = int(args['tree_width'])
@@ -138,10 +143,10 @@ class Plotter:
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
-        self.train_est_num_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
-        self.train_true_num_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
-        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
-        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
+        self.train_est_num_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
+        self.train_true_num_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
+        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
+        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
 
         # test dataset tensors
         self.test_est_num_fn = f'{est_proj_prefix}.test_est.labels_num.csv'
@@ -157,36 +162,36 @@ class Plotter:
         self.emp_est_cat_fn = f'{est_proj_prefix}.empirical_est.labels_cat.csv'
 
         # network
-        self.model_arch_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        self.history_fn = f'{trn_proj_prefix}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
+        self.model_arch_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
 
         # new empirical plot
         self.save_cpi_est_fn = f'{plt_proj_prefix}.empirical_estimate'
 
         # PCA plotting output
-        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.train_pca_phy_data.pdf'
-        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.train_pca_aux_data.pdf'
-        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.train_pca_labels_num.pdf'
+        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_phy_data.pdf'
+        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_aux_data.pdf'
+        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_labels_num.pdf'
         # self.save_emp_pca_aux_data_fn    = f'{plt_proj_prefix}.empirical_pca_contour_aux_data.pdf'
         # self.save_emp_pca_labels_fn      = f'{plt_proj_prefix}.empirical_pca_contour_labels_num.pdf'
 
         # density plotting output
-        self.save_train_density_aux_fn = f'{plt_proj_prefix}.train_density_aux_data.pdf'
-        self.save_train_density_label_fn = f'{plt_proj_prefix}.train_density_labels_num.pdf'
-        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.empirical_density_aux_data.pdf'
-        self.save_emp_density_label_fn = f'{plt_proj_prefix}.empirical_density_labels_num.pdf'
+        self.save_train_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_density_aux_data.pdf'
+        self.save_train_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_density_labels_num.pdf'
+        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical_density_aux_data.pdf'
+        self.save_emp_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical_density_labels_num.pdf'
 
         # scatter plotting output
-        self.save_train_est_fn = f'{plt_proj_prefix}.train_estimate'
-        self.save_test_est_fn = f'{plt_proj_prefix}.test_estimate'
+        self.save_train_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_estimate'
+        self.save_test_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test_estimate'
 
         # network plotting output
-        self.save_network_fn = f'{plt_proj_prefix}.network_architecture.pdf'
-        self.save_history_fn = f'{plt_proj_prefix}.train_history'
+        self.save_network_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.network_architecture.pdf'
+        self.save_history_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history'
 
         # summary plotting output
-        self.save_summary_fn = f'{plt_proj_prefix}.summary.pdf'
-        self.save_report_fn = f'{plt_proj_prefix}.summary.csv'
+        self.save_summary_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.summary.pdf'
+        self.save_report_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.summary.csv'
 
         # cat vs. real parameter names
         self.param_name_num = [k for k, v in self.param_est.items() if

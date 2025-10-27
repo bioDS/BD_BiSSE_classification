@@ -182,12 +182,12 @@ def settings_registry():
         'cpi_coverage':         {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.95,           'help': 'Expected coverage percent for calibrated prediction intervals (CPIs)'},
         'cpi_asymmetric':       {'step': 'T',      'type': str,    'section': 'Train',  'default': 'T',            'help': 'Use asymmetric (True) or symmetric (False) adjustments for CPIs?', 'bool': True},
         'loss_numerical':       {'step': 'T',      'type': str,    'section': 'Train',  'default': 'mse',          'help': 'Loss function for real value estimates', 'choices': ['mse', 'mae']},
-        'optimizer':            {'step': 'T',      'type': str,    'section': 'Train',  'default': 'adam',         'help': 'Method used for optimizing neural network', 'choices': ['adam', 'adadelta', 'adagrad', 'adamw', 'rmsprop', 'sgd']},
-        'learning_rate':        {'step': 'TP',      'type': float,  'section': 'Train',  'default': 0.001,          'help': 'Learning rate for optimizer'},
+        'optimizer':            {'step': 'TP',      'type': str,    'section': 'Train',  'default': 'adam',         'help': 'Method used for optimizing neural network', 'choices': ['adam', 'adadelta', 'adagrad', 'adamw', 'rmsprop', 'sgd']},
+        'learning_rate':        {'step': 'TEP',      'type': float,  'section': 'Train',  'default': 0.001,          'help': 'Learning rate for optimizer'},
         'activation_func':      {'step': 'T',      'type': str,    'section': 'Train',  'default': 'relu',         'help': 'Activation function for all internal layers', 'choices': ['relu', 'leaky_relu', 'elu', 'tanh', 'sigmoid']}, 
         'log_offset':           {'step': 'FTEP',   'type': float,  'section': 'Train',  'default': 1.0,            'help': 'Offset size c when taking ln(x+c) for zero-valued variables'},
         'phy_channel_plain':    {'step': 'T',      'type': list,   'section': 'Train',  'default': [64, 96, 128],  'help': 'Output channel sizes for plain convolutional layers for phylogenetic state input'},
-        'phy_hidden_size':      {'step':'T', 'type':int, 'section':'Train', 'default':50, 'help':'hidden layer size'},
+        'phy_hidden_size':      {'step':'TEP', 'type':int, 'section':'Train', 'default':50, 'help':'hidden layer size'},
         'phy_channel_stride':   {'step': 'T',      'type': list,   'section': 'Train',  'default': [64, 96],       'help': 'Output channel sizes for stride convolutional layers for phylogenetic state input'},
         'phy_channel_dilate':   {'step': 'T',      'type': list,   'section': 'Train',  'default': [32, 64],       'help': 'Output channel sizes for dilate convolutional layers for phylogenetic state input'},
         'aux_channel':          {'step': 'T',      'type': list,   'section': 'Train',  'default': [128, 64, 32],  'help': 'Output channel sizes for dense layers for auxiliary data input'},
@@ -198,8 +198,8 @@ def settings_registry():
         'phy_stride_stride':    {'step': 'T',      'type': list,   'section': 'Train',  'default': [3, 6],         'help': 'Stride sizes for stride convolutional layers for phylogenetic state input'},
         'phy_dilate_dilate':    {'step': 'T',      'type': list,   'section': 'Train',  'default': [3, 5],         'help': 'Dilation sizes for dilate convolutional layers for phylogenetic state input'},
         'load_model':     {'step': 'T',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Save model for checkpointing', 'bool': True},
-        'phylo_pool':     {'step': 'TP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use phylo pooling instead of average pooling', 'bool': True},
-        'graph_conv':     {'step': 'TP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use GraphConv instead of GCNConv', 'bool': True},
+        'phylo_pool':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use phylo pooling instead of average pooling', 'bool': True},
+        'graph_conv':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use GraphConv instead of GCNConv', 'bool': True},
 
 
 

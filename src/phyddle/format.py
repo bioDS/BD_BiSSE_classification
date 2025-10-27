@@ -937,7 +937,7 @@ class Formatter:
         num_edges = max(len(node_1), len(node_2))
         num_nodes = len(nodes_dist)
         offset = offset + num_edges
-        save_graph_csv_ = self.save_graph_csv or save_graph_csv
+        save_graph_csv_ = self.save_graph_csv # or save_graph_csv
         if save_graph_csv_  and graph_data is not None:
             graph_str =  edge_data.to_string(index_names=False, index=False, header=False)#util.ndarray_to_flat_str(np.array(graph_data[1])) + "\n" #util.ndarray_to_flat_str(np.array(graph_data)) + '\n'
             util.write_to_file(graph_str, graph_edges_fn)
@@ -963,8 +963,8 @@ class Formatter:
         if mode == 'sim':
             # split raw labels into est vs. data
             param_est = labels[self.param_est]
-            
             # check label matching
+
             for k in self.param_est:
                 if k not in param_est.columns:
                     util.print_warn(f"Estimated parameter '{k}' missing in labels. Skipped.")

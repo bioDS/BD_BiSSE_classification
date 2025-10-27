@@ -94,6 +94,14 @@ class Estimator:
         self.warn_lbl_outlier   = float(args['warn_lbl_outlier'])
         self.est_aux_data_raw   = None
         self.est_labels_num_raw = None
+
+        self.phylo_pool         =bool(args['phylo_pool'])
+        self.graph_conv         =bool(args['graph_conv'])
+        self.phy_hidden_size = int(args['phy_hidden_size'])
+        self.optimizer          = str(args['optimizer'])
+        self.scheduler="CosineAnnealingLR"
+
+        self.learning_rate      = float(args['learning_rate'])
         
         # get size of CPV+S tensors
         self.num_tree_col = util.get_num_tree_col(self.tree_encode,
@@ -129,6 +137,7 @@ class Estimator:
         self.phy_data                   = None       # init in load_format_input()
         self.aux_data                   = None       # init in load_format_input()
         self.idx_data                   = None       # init in load_format_input()
+        self.graph_data                 = None
         self.aux_data_names             = None       # init in load_format_input()
         self.true_labels_num            = None       # init in load_format_input()
         self.true_labels_cat            = None       # init in load_format_input()
@@ -250,11 +259,13 @@ class Estimator:
         Returns:
             bool: True if empirical analysis is being performed.
         """
-
+        print("mode a = ", mode)
         assert mode in ['sim', 'emp']
-        
+        print("mode b = ", mode)
+
         # check if empirical directory exists
         if not os.path.exists(self.fmt_dir):
+            print("empirical directory not found")
             return False
 
         data_src = None
@@ -262,15 +273,16 @@ class Estimator:
             data_src = 'empirical'
         elif mode == 'sim':
             data_src = 'test'
-
+        print("data_src", data_src)
         # check if empirical directory contains files
         files = ['']
         if self.tensor_format == 'hdf5':
-            files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ]
+            files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ] # {self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}
         elif self.tensor_format == 'csv':
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.phy_data.csv',
                       f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.aux_data.csv' ]
-        
+        print("files")
+        print(files)
         # fail if key file missing
         for fn in files:
             if not os.path.exists(fn):
@@ -291,7 +303,7 @@ class Estimator:
             
         """
         # filesystem
-        path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
+        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
         train_norm_aux_data_fn = f'{path_prefix}.train_norm.aux_data.csv'
         train_norm_labels_num_fn = f'{path_prefix}.train_norm.labels_num.csv'
         model_cpi_fn = f'{path_prefix}.cpi_adjustments.csv'
@@ -330,16 +342,18 @@ class Estimator:
         
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
+            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
         elif mode == 'emp':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
+            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
+            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
         
         # simulated test datasets for csv or hdf5
         phy_data_fn = f'{path_prefix}.phy_data.csv'
         aux_data_fn = f'{path_prefix}.aux_data.csv'
         idx_data_fn = f'{path_prefix}.index.csv'
         labels_fn = f'{path_prefix}.labels.csv'
-        hdf5_fn = f'{path_prefix}.hdf5'
+        hdf5_fn = f'{short_path_prefix}.hdf5'
         
         # load all the test dataset
         phy_data = None
@@ -432,23 +446,22 @@ class Estimator:
         # filesystem
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.test'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
         if mode == 'emp':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.empirical'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
             
-        model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.trained_model.pkl'
-        out_est_labels_num_fn = f'{path_prefix}_est.labels_num.csv'
-        out_true_labels_num_fn = f'{path_prefix}_true.labels_num.csv'
-        out_est_labels_cat_fn = f'{path_prefix}_est.labels_cat.csv'
-        out_true_labels_cat_fn = f'{path_prefix}_true.labels_cat.csv'
+        model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        out_est_labels_num_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
+        out_true_labels_num_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
+        out_est_labels_cat_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
+        out_true_labels_cat_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
     
         # load model
         self.mymodel = torch.load(model_arch_fn, map_location=self.TORCH_DEVICE, weights_only=False)
         self.mymodel.to(self.TORCH_DEVICE)
 
         # get estimates
-        label_est = self.mymodel(torch.Tensor(self.phy_data).to(self.TORCH_DEVICE),
-                                 torch.Tensor(self.aux_data).to(self.TORCH_DEVICE))
+        label_est = self.mymodel(torch.Tensor(self.graph_dat).to(self.TORCH_DEVICE))
         
         # real vs. cat estimates
         labels_est_num = label_est[0:3]
