@@ -21,6 +21,9 @@ import pandas as pd
 import h5py
 import torch
 
+from torch_geometric.data import Data as GeoData
+from torch_geometric.loader import DataLoader
+
 # phyddle imports
 from phyddle import utilities as util
 
@@ -85,7 +88,10 @@ class Estimator:
         self.tensor_format      = str(args['tensor_format'])
         self.num_char           = int(args['num_char'])
         self.num_states         = int(args['num_states'])
-        self.param_est          = dict(args['param_est'])
+        self.param_est          = dict(args['param_est'])        
+        self.param_cat          = dict() 
+        self.param_cat_names = list()  
+
         self.log_offset         = float(args['log_offset'])
         self.use_cuda           = bool(args['use_cuda'])
         
@@ -99,7 +105,7 @@ class Estimator:
         self.graph_conv         =bool(args['graph_conv'])
         self.phy_hidden_size = int(args['phy_hidden_size'])
         self.optimizer          = str(args['optimizer'])
-        self.scheduler="CosineAnnealingLR"
+        self.scheduler="NA"
 
         self.learning_rate      = float(args['learning_rate'])
         
@@ -143,6 +149,8 @@ class Estimator:
         self.true_labels_cat            = None       # init in load_format_input()
         self.est_labels_num             = None       # init in make_results()
         self.mymodel                    = None       # init in make_results()
+
+        self.num_sample = -1
         
         # done
         return
@@ -250,6 +258,53 @@ class Estimator:
         util.print_str('... done!', verbose)
         return
 
+
+    def separate_labels(self, labels):
+        """Separates labels for categorical param_est targets.
+        
+        This function separates labels into numerical and categorical subsets
+        based on the param_est dictionary.
+        
+        Args:
+            labels (numpy.ndarray): The input labels.
+            
+        Returns:
+            labels_num (numpy.ndarray): The numerical-valued labels.
+            labels_cat (numpy.ndarray): The categorical labels.
+        
+        """
+
+        idx_num = list()
+        idx_cat = list()
+        
+        for k,v in self.param_est.items():
+            if v == 'cat':
+                self.has_label_cat = True
+                idx = self.label_names.index(k)
+                unique_cats, encoded_cats = np.unique(labels[:,idx],
+                                                      return_inverse=True)
+                print(unique_cats)
+                self.param_cat[k] = len(unique_cats)
+                labels[:,idx] = encoded_cats
+                idx_cat.append( idx )
+                self.param_cat_names.append(k)
+                
+            elif v == 'num':
+                self.has_label_num = True
+                # print(self.label_names)
+                idx_num.append( self.label_names.index(k) )
+                self.param_num_names.append(k)
+        
+        if not self.has_label_num and not self.has_label_cat:
+            util.print_err(f"No training labels found.", exit=True)
+               
+        # get data subsets
+        labels_num = labels[:,idx_num].copy()
+        labels_cat = labels[:,idx_cat].copy()
+
+        # done
+        return labels_num, labels_cat
+
     def has_valid_dataset(self, mode='sim'):
         """Determines if empirical analysis is being performed.
         
@@ -280,7 +335,7 @@ class Estimator:
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ] # {self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}
         elif self.tensor_format == 'csv':
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.phy_data.csv',
-                      f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.aux_data.csv' ]
+             f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.aux_data.csv' ]
         print("files")
         print(files)
         # fail if key file missing
@@ -359,8 +414,12 @@ class Estimator:
         phy_data = None
         aux_data = None
         idx_data = None
+        graph_data = None
         labels = None
         label_names = None
+        nodes_dist = None
+        node_1_data = None
+        node_2_data = None
         if self.tensor_format == 'csv':
             phy_data = pd.read_csv(phy_data_fn, header=None,
                                         on_bad_lines='skip').to_numpy()
@@ -380,7 +439,17 @@ class Estimator:
             hdf5_file = h5py.File(hdf5_fn, 'r')
             phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
             aux_data = pd.DataFrame(hdf5_file['aux_data']).to_numpy()
-            idx_data = pd.DataFrame(hdf5_file['idx'], columns=['idx'])
+            idx_data = pd.DataFrame(hdf5_file['idx'], columns=['idx']).to_numpy()
+            node_1_data = pd.DataFrame(hdf5_file['node_1'])#.to_numpy()
+            node_2_data = pd.DataFrame(hdf5_file['node_2'])#.to_numpy()
+            nodes_dist = pd.DataFrame(hdf5_file['nodes_dist']).to_numpy()
+            graph_ids = pd.DataFrame(hdf5_file['graph_id']).to_numpy()
+            num_nodes = pd.DataFrame(hdf5_file['num_nodes']).to_numpy()
+            num_edges = pd.DataFrame(hdf5_file['num_edges']).to_numpy()
+            self.label_names = [s.decode() for s in hdf5_file['label_names'][0,:] ]
+
+
+
             # idx_data = idx_data[:,:].astype('int')
             if mode == 'sim':
                 labels = pd.DataFrame(hdf5_file['labels']).to_numpy()
@@ -388,16 +457,58 @@ class Estimator:
             aux_data_names = [ s.decode() for s in hdf5_file['aux_data_names'][0,:] ]
             hdf5_file.close()
         
+        edges_matrix = pd.concat((node_1_data, node_2_data), axis=1).to_numpy()
+        node_attributes = nodes_dist.flatten()
+
+        labels_num, labels_cat = self.separate_labels(labels)
+
+        # self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
+        self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
+        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
+        self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
+        self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
+
+        edges_matrix = torch.from_numpy(edges_matrix.astype('int'))
+        min_index =   edges_matrix.min()
+        edges_matrix = torch.sub(edges_matrix, min_index)
+        unique = torch.unique(edges_matrix)
+        all_from_unique = torch.arange(edges_matrix.max()+1)
+        difference = all_from_unique[torch.isin(all_from_unique, unique, invert=True)]
+        reduction = torch.searchsorted(difference, all_from_unique, right=False)
+        edges_matrix =  torch.sub(edges_matrix, reduction[edges_matrix])
+
+        self.graph_data = []
+        graph_ids = np.unique(graph_ids)
+        self.id_list = graph_ids
+        i = 0
+        num_nodes = num_nodes.astype(int)
+        num_edges = num_edges.astype(int)
+        prev_edge_ind = 0
+        prev_node_ind = 0
+
+        for i in range(len(graph_ids)):
+
+            current_edge_ind = prev_edge_ind + int(num_edges[i])
+            current_node_ind = prev_node_ind + int(num_nodes[i])
+            selected_nodes = node_attributes[prev_node_ind:current_node_ind]
+            selected_edges = edges_matrix[:, prev_edge_ind:current_edge_ind]
+        
+            #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+            self.graph_data.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges))# y=labels_cat[i])#, phy_data=self.phy_data, aux_data=self.aux_data))
+            prev_edge_ind = current_edge_ind
+            prev_node_ind = current_node_ind
+
+        
         # get number of samples
-        num_sample = phy_data.shape[0]
+        self.num_sample = len(graph_ids)
 
         # reshape phylogenetic state tensor
-        phy_data.shape = (num_sample, -1, self.num_data_col)
-        phy_data = np.transpose(phy_data, axes=[0,2,1]).astype('float32')
-        self.phy_data = phy_data
+        # phy_data.shape = (num_sample, -1, self.num_data_col)
+        # phy_data = np.transpose(phy_data, axes=[0,2,1]).astype('float32')
+        # self.phy_data = phy_data
 
         # test dataset normalization
-        assert aux_data.shape[0] == num_sample
+        assert aux_data.shape[0] == self.num_sample
         self.aux_data = util.normalize(aux_data, self.train_aux_data_mean_sd)
         self.aux_data_names = aux_data_names
         
@@ -415,7 +526,7 @@ class Estimator:
                 if p in self.label_cat_names:
                     label_cat_idx.append(i)
             
-            assert labels.shape[0] == num_sample
+            assert labels.shape[0] == self.num_sample
             self.true_labels_num = labels[:,label_num_idx]
             self.true_labels_cat = labels[:,label_cat_idx]
             
@@ -461,7 +572,9 @@ class Estimator:
         self.mymodel.to(self.TORCH_DEVICE)
 
         # get estimates
-        label_est = self.mymodel(torch.Tensor(self.graph_dat).to(self.TORCH_DEVICE))
+        loader = DataLoader(self.graph_data, batch_size = self.num_sample)
+        for batch in loader:
+            label_est = self.mymodel(torch.Tensor(batch).to(self.TORCH_DEVICE))
         
         # real vs. cat estimates
         labels_est_num = label_est[0:3]
@@ -470,7 +583,7 @@ class Estimator:
         # force categorical dimensionality (had problems for categ)
         for k,v in labels_est_cat.items():
             labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
-                                              shape=(self.phy_data.shape[0],-1))
+                                              shape=(self.graph_data.shape[0],-1))
 
         # point estimates & CPIs for test labels
         if self.has_label_num:

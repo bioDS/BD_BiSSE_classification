@@ -297,7 +297,7 @@ class CnnTrainer(Trainer):
         # initialize base class
         super().__init__(args)
         
-        self.num_classes=2# 1
+        self.num_classes=4# 1
         self.aux_data_names = list()    # init with load_input()
         self.label_names    = list()    # init with load_input()
         self.num_aux_data   = int()     # init with load_input()
@@ -328,7 +328,7 @@ class CnnTrainer(Trainer):
         self.has_label_cat = False
         self.has_label_num = False
 
-        self.scheduler="CosineAnnealingLR"
+        self.scheduler="NA"
         
         return
     
@@ -585,6 +585,14 @@ class CnnTrainer(Trainer):
         print("train:", train_ids)
         print("val:", val_ids)
         print("calib:", calib_ids)
+        print("training labels")
+        print("label 1:", sum(train_labels_cat))
+        print("label 0:", (len(train_labels_cat) - sum(train_labels_cat)))
+        print("validation labels")
+        print(val_labels_cat)
+        print("label 1:", sum(val_labels_cat))
+        print("label 0:", (len(val_labels_cat) - sum(val_labels_cat)))
+        
 
 
         # torch datasets
@@ -785,9 +793,9 @@ class CnnTrainer(Trainer):
         # optimizer
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         if self.optimizer == 'adam':
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=0.001)
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
         if self.optimizer == 'adamw':
-            optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate, weight_decay=0.001)
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
         elif self.optimizer == 'adagrad':
             optimizer = torch.optim.Adagrad(self.model.parameters(), lr=self.learning_rate)
         elif self.optimizer == 'adadelta':
@@ -799,7 +807,7 @@ class CnnTrainer(Trainer):
         
         #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
     #factor=0.5, patience=3, threshold=0.0001, threshold_mode='abs')
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2000, eta_min=1e-5)
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2000, eta_min=1e-5)
 
             
         # optimizer = torch.optim.Adam(self.model.parameters(),
@@ -859,11 +867,11 @@ class CnnTrainer(Trainer):
             correct = 0
             total_graphs = 0
             self.model.train()
-            accumulation_steps = 15
+            accumulation_steps = 30
 
             # (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) = next(iter(train_loader))
             # for epoch in range(300):
-            #     optimizer.zero_grad()
+            optimizer.zero_grad()
             #     logits = self.model(phy_dat, graph_dat, aux_dat)
             #     preds = logits[3]
             #     loss = loss_categ_func(preds, lbl_cat.flatten())
@@ -876,99 +884,126 @@ class CnnTrainer(Trainer):
 #             for j, (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
 
             for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
-                                                                 total=num_batches,
-                                                                 desc=train_msg,
-                                                                 smoothing=0):
-                                         
-                
-                # short cut batches for training
-                # if j > 1:
-                #     break
+                                                                    total=num_batches,
+                                                                    desc=train_msg,
+                                                                    smoothing=0):
+                                            
+                    
+                    # short cut batches for training
+                    # if j > 1:
+                    #     break
 
-                # print("lbl_cat")
-                # print(lbl_cat)
-                
-                # send labels to device
-                #phy_dat = phy_dat.to(self.TORCH_DEVICE)
-                #aux_dat = aux_dat.to(self.TORCH_DEVICE)
+                    # print("lbl_cat")
+                    # print(lbl_cat)
+                    
+                    # send labels to device
+                    #phy_dat = phy_dat.to(self.TORCH_DEVICE)
+                    #aux_dat = aux_dat.to(self.TORCH_DEVICE)
+                for g in graph_dat:
+                    if (g.x.shape[0] != g.edge_index.shape[1] + 1):
+                        print(g)
+                if j > 1200:
+                    print(graph_dat)
+                #     print("j:", j)
+                #     print(len(idx_dat))
+                #     print(len(lbl_num))
+                #     print(len(lbl_cat))
+                #     print(len(graph_dat))
                 idx_dat = idx_dat.to(self.TORCH_DEVICE)
                 lbl_num = lbl_num.to(self.TORCH_DEVICE)
                 lbl_cat = lbl_cat.to(self.TORCH_DEVICE)
-                #graph_dat = graph_dat.to(self.TORCH_DEVICE)
+                    #graph_dat = graph_dat.to(self.TORCH_DEVICE)
 
 
 
-                # forward pass of training data to estimate labels
-                # print("graphs :)")
-                # print(graph_dat)
-                lbls_hat = self.model(graph_dat)
+                    # forward pass of training data to estimate labels
+                    # print("graphs :)")
+                    # print(graph_dat)
+                for k in range(1):
+                    try:
+                        lbls_hat = self.model(graph_dat)
+                    except Exception as e:
+                        print("exception in lbls_hat, j:", j, e)
+                        quit()
 
-                # print("params")
-                # if j == 1:
-                #     for name, p in self.model.named_parameters():
-                #         print(name, p)
-                #         if p.grad is not None:
-                #             print(name, p.grad.abs().max())
-                # if i > 2:
-                #     quit()
-                third_arg = lbls_hat[3] # [0:int(len(lbls_hat[3])/4)]
-                preds = third_arg #.long()
-                # print(f"Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
-                # print(f"Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
-                # print(f"Unique values: {torch.unique(third_arg).numel()}")
-                # correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
-                # total_graphs = total_graphs + len(lbl_cat.flatten())
-                #if j == 1:
-                #print("most recent out:")
-                #print(preds)
-                # print("labels:")
-                # print(lbl_cat.flatten())
-                loss_list = list()
-                if self.has_label_num:
-                    loss_value = loss_value_func(lbls_hat[0], lbl_num)
-                    loss_lower = loss_lower_func(lbls_hat[1], lbl_num)
-                    loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
-                    loss_list += [ loss_value, loss_lower, loss_upper ]
-                if self.has_label_cat:
-                    loss_categ = loss_categ_func(preds, lbl_cat.flatten())
-                    # print("preds")
-                    #p = torch.sigmoid(preds)
-                    #predicted_class = (p >= 0.5).long()
-                    # print("truth:", lbl_cat.flatten())
-                    #acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat) #BCE
-                    amax = preds.argmax(dim=1)
-                    # print("pred class")
-                    # print(amax)
-                    #print("matches")
-                    #print(amax == lbl_cat.flatten())
-                    train_correct += int((amax == lbl_cat.flatten()).sum())
-                    train_length += len(amax)
-                    # print("correct:", train_correct)
-                    #print("percent")
-                    #print(acc_categ)
+                    # print("params")
+                    # if j == 1:
+                    #     for name, p in self.model.named_parameters():
+                    #         print(name, p)
+                    #         if p.grad is not None:
+                    #             print(name, p.grad.abs().max())
+                    # if i > 2:
+                    #     quit()
+                    third_arg = lbls_hat[3] # [0:int(len(lbls_hat[3])/4)]
+                    preds = third_arg #.long()
+                    # print(f"Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
+                    # print(f"Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
+                    # print(f"Unique values: {torch.unique(third_arg).numel()}")
+                    # correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
+                    # total_graphs = total_graphs + len(lbl_cat.flatten())
+                    #if j == 1:
+                    if j % 150 == 0:
+                        amax = preds.argmax(dim=1)
+                        # print("pred val:\t\t", amax) 
+                        # print("actual labels:\t\t", lbl_cat.flatten())
+                        actual_labels = lbl_cat.flatten()
+                        selected_labels_1 = actual_labels == 1
+                        # print(amax[selected_labels])
+                        # print(actual_labels[selected_labels])
+                        selected_labels_0 = actual_labels == 0
+                        # print("number correct:\t\t", int((amax == lbl_cat.flatten()).sum()), "\twhere actual class = 1:", int((amax[selected_labels_1] == actual_labels[selected_labels_1]).sum()), "\twhere actual class = 0:", int((amax[selected_labels_0] == actual_labels[selected_labels_0]).sum()))
 
-                    loss_list += [ loss_categ ]
-                # loss_combined = torch.stack(loss_list).sum()
+                    #print("most recent out:")
+                    #print(preds)
+                    # print("labels:")
+                    # print(lbl_cat.flatten())
+                    loss_list = list()
+                    if self.has_label_num:
+                        loss_value = loss_value_func(lbls_hat[0], lbl_num)
+                        loss_lower = loss_lower_func(lbls_hat[1], lbl_num)
+                        loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
+                        loss_list += [ loss_value, loss_lower, loss_upper ]
+                    if self.has_label_cat:
+                        loss_categ = loss_categ_func(preds, lbl_cat.flatten())
+                        # print("preds")
+                        #p = torch.sigmoid(preds)
+                        #predicted_class = (p >= 0.5).long()
+                        # print("truth:", lbl_cat.flatten())
+                        #acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat) #BCE
+                        amax = preds.argmax(dim=1)
+                        # print("pred class")
+                        # print(amax)
+                        #print("matches")
+                        #print(amax == lbl_cat.flatten())
+                        train_correct += int((amax == lbl_cat.flatten()).sum())
+                        train_length += len(amax)
+                        # print("correct:", train_correct)
+                        #print("percent")
+                        #print(acc_categ)
+
+                        loss_list += [ loss_categ ]
+                    # loss_combined = torch.stack(loss_list).sum()
+                    
+                    if loss_aggregation == 'sum':
+                        loss_combined = torch.stack(loss_list).sum()
+                    elif loss_aggregation == 'geometric':
+                        loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
+                    elif loss_aggregation == 'median':
+                        loss_combined = torch.median(torch.stack(loss_list))
+                    # collect history stats
+                    if self.has_label_num:
+                        trn_loss_value    += loss_value.item() / num_batches
+                        trn_loss_lower    += loss_lower.item() / num_batches
+                        trn_loss_upper    += loss_upper.item() / num_batches
+                        trn_mse_value     += (torch.mean((lbl_num - lbls_hat[0])**2)).item() / num_batches
+                        trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
+                        trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
+                    trn_loss_combined += loss_combined.item() / num_batches
                 
-                if loss_aggregation == 'sum':
-                    loss_combined = torch.stack(loss_list).sum()
-                elif loss_aggregation == 'geometric':
-                    loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
-                elif loss_aggregation == 'median':
-                    loss_combined = torch.median(torch.stack(loss_list))
-                # collect history stats
-                if self.has_label_num:
-                    trn_loss_value    += loss_value.item() / num_batches
-                    trn_loss_lower    += loss_lower.item() / num_batches
-                    trn_loss_upper    += loss_upper.item() / num_batches
-                    trn_mse_value     += (torch.mean((lbl_num - lbls_hat[0])**2)).item() / num_batches
-                    trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
-                    trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
-                trn_loss_combined += loss_combined.item() / num_batches
-               
                 
                 # backward pass to update gradients
                 #loss_combined.requires_grad = True #KT
+                
                 loss_combined.backward()
 
                 # self.model.train()
@@ -979,8 +1014,8 @@ class CnnTrainer(Trainer):
 
                     # reset gradients for tensors
                     optimizer.zero_grad()
-            scheduler.step()
-            print(scheduler.get_last_lr())
+            #scheduler.step()
+            #print(scheduler.get_last_lr())
             
             trn_acc_combined += train_correct / train_length
             # print("total correct:", train_correct, " out of ", train_length)
@@ -993,25 +1028,30 @@ class CnnTrainer(Trainer):
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t'
             trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
 
+            print("pre model eval")
 
             self.model.eval()
             with torch.no_grad():
-                correct = 0
-                total_graphs = 0
-                #for j, (val_phy_dat, val_graph_dat, val_aux_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
-                for j, (val_graph_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
 
+                for k in range(1):
+                    correct = 0
+                    total_graphs = 0
+                    print("pre val loader")
+                    #for j, (val_phy_dat, val_graph_dat, val_aux_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
+                    for j, (val_graph_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
                                                                     total=val_num_batches,
                                                                     desc=train_msg,
                                                                     smoothing=0):
                     
                     #val_phy_dat = val_phy_dat.to(self.TORCH_DEVICE)
                     #val_aux_dat = val_aux_dat.to(self.TORCH_DEVICE)
-                    val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
-                    val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
-                    val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
-                    # print("VALIDATION GRAPH DATA")
-                    # print(val_graph_dat)
+                        val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
+                        val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
+                        val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
+                        print("VALIDATION GRAPH DATA")
+                        print(val_idx_dat)
+                        print(val_lbl_num)
+                        print(val_graph_dat)
                     #val_graph_dat = val_graph_dat.to(self.TORCH_DEVICE)
 
                     # reset gradients for tensors
@@ -1020,77 +1060,92 @@ class CnnTrainer(Trainer):
 
 
                     # # forward pass of validation to estimate labels
-                    val_lbls_hat       = self.model(val_graph_dat)
-                    #self.model(val_phy_dat, val_graph_dat, val_aux_dat)
-
-
-                    #print("val lbls hat 3")
-                    #print(val_lbls_hat[3])
-                    third_arg = val_lbls_hat[3]#[0:int(len(lbls_hat[3])/4)]
-                    # print(" val out:")
-                    # print(third_arg.flatten())
-                    # print(f"Val Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
-                    # print(f"Val Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
-                    # print(f"Val Unique values: {torch.unique(third_arg).numel()}")
-                    # collect validation metrics
-                    val_loss_list = list()
-                    val_loss_value = 0.
-                    val_loss_lower = 0.
-                    val_loss_upper = 0.
-                    # correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
-                    # total_graphs = total_graphs + len(val_lbl_cat.flatten())
-
-                    if self.has_label_num:
-                        val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
-                        val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
-                        val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
-                        val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
-                    # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
-                    if self.has_label_cat:
-                        val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten()).item()
-                        val_loss_list += [ val_loss_categ ]
-                        #p = torch.sigmoid(third_arg)
-                        #predicted_class = (p >= 0.5).long()
-                        # print("truth:", lbl_cat.flatten())
-                        # val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
-                        pred_class = third_arg.argmax(dim=1) 
-                        if j == 0:
-                            print("pred val:", pred_class) 
-                        val_correct += int((pred_class == val_lbl_cat.flatten()).sum())
-                        # print("correct:", int((pred_class.flatten() == val_lbl_cat.flatten()).sum()))
-                        val_length += len(val_lbl_cat)
-
-                    # val_loss_combined = sum(val_loss_list)
-                    if loss_aggregation == 'sum':
-                        # val_loss_combined = torch.stack(val_loss_list).sum()
-                        val_loss_combined = np.sum(val_loss_list)
-                    elif loss_aggregation == 'geometric':
-                        val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
-                        # val_loss_combined = torch.exp(torch.mean(torch.log(torch.stack(val_loss_list))))
-                    elif loss_aggregation == 'median':
-                        # val_loss_combined = torch.median(torch.stack(val_loss_list))
-                        val_loss_combined = np.median(val_loss_list)
+                        print("pre val model")
+                        try:
+                            val_lbls_hat       = self.model(val_graph_dat)
+                        except Exception as e:
+                            print("val exception in lbls_hat, j:", j, e)
+                            quit()
                         
-                    val_mse_value = 0.
-                    val_mae_value = 0.
-                    val_mape_value = 0.
-                    if self.has_label_num:
-                        val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[0])**2)).item()
-                        val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[0]))).item()
-                        val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[0]) / val_lbl_num))).item()
+                        #self.model(val_phy_dat, val_graph_dat, val_aux_dat)
+
+
+                        #print("val lbls hat 3")
+                        #print(val_lbls_hat[3])
+                        third_arg = val_lbls_hat[3]#[0:int(len(lbls_hat[3])/4)]
+                        # print(" val out:")
+                        # print(third_arg.flatten())
+                        # print(f"Val Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
+                        # print(f"Val Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
+                        # print(f"Val Unique values: {torch.unique(third_arg).numel()}")
+                        # collect validation metrics
+                        val_loss_list = list()
+                        val_loss_value = 0.
+                        val_loss_lower = 0.
+                        val_loss_upper = 0.
+                        # correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
+                        # total_graphs = total_graphs + len(val_lbl_cat.flatten())
+
+                        if self.has_label_num:
+                            val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
+                            val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
+                            val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
+                            val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
+                        # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
+                        if self.has_label_cat:
+                            val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten()).item()
+                            val_loss_list += [ val_loss_categ ]
+                            #p = torch.sigmoid(third_arg)
+                            #predicted_class = (p >= 0.5).long()
+                            # print("truth:", lbl_cat.flatten())
+                            # val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
+                            pred_class = third_arg.argmax(dim=1) 
+                            if j % 60 == 0:
+                                # print("pred val:\t\t", pred_class) 
+                                # print("actual labels:\t\t", val_lbl_cat.flatten())
+                                actual_labels = val_lbl_cat.flatten()
+                                selected_labels_1 = actual_labels == 1
+                                selected_labels_0 = actual_labels == 0
+
+                                # print("number correct:\t\t", int((pred_class == val_lbl_cat.flatten()).sum()), "\twhere actual class = 1:", int((pred_class[selected_labels_1] == actual_labels[selected_labels_1]).sum()), "\twhere actual class = 0:", int((pred_class[selected_labels_0] == actual_labels[selected_labels_0]).sum()))
+
+                                # print(pred_class[selected_labels])
+                                # print(actual_labels[selected_labels])
+                            val_correct += int((pred_class == val_lbl_cat.flatten()).sum())
+                                # print("correct:", int((pred_class.flatten() == val_lbl_cat.flatten()).sum()))
+                            val_length += len(val_lbl_cat)
+
+                        # val_loss_combined = sum(val_loss_list)
+                        if loss_aggregation == 'sum':
+                            # val_loss_combined = torch.stack(val_loss_list).sum()
+                            val_loss_combined = np.sum(val_loss_list)
+                        elif loss_aggregation == 'geometric':
+                            val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
+                            # val_loss_combined = torch.exp(torch.mean(torch.log(torch.stack(val_loss_list))))
+                        elif loss_aggregation == 'median':
+                            # val_loss_combined = torch.median(torch.stack(val_loss_list))
+                            val_loss_combined = np.median(val_loss_list)
+                            
+                        val_mse_value = 0.
+                        val_mae_value = 0.
+                        val_mape_value = 0.
+                        if self.has_label_num:
+                            val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[0])**2)).item()
+                            val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[0]))).item()
+                            val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[0]) / val_lbl_num))).item()
 
 
 
-                # print("total correct:", val_correct, " out of ", val_length)
-                val_acc_combined = val_correct/val_length  
-                val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
-                                        val_loss_combined, val_mse_value, val_mae_value,
-                                        val_mape_value, val_acc_combined ]
-                # acc = correct/(total_graphs)
-                # print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
-            # raw training metrics for epoch
-            val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
-            val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
+                    print("total correct:", val_correct, " out of ", val_length)
+                    val_acc_combined = val_correct/val_length  
+                    val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
+                                            val_loss_combined, val_mse_value, val_mae_value,
+                                            val_mape_value, val_acc_combined ]
+                    # acc = correct/(total_graphs)
+                    # print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
+                # raw training metrics for epoch
+                    val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
+                    val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
 
             
             #scheduler.step(val_loss_combined)
@@ -1098,70 +1153,70 @@ class CnnTrainer(Trainer):
             #print(f"LR: {current_lr:.6f}")
 
             # changes in training metrics between epochs
-            if i > 0:
-                diff_trn_acc = trn_acc_combined - prev_trn_acc_combined
-                diff_val_acc = val_acc_combined - prev_val_acc_combined
-                diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
-                diff_val_loss = val_loss_combined - prev_val_loss_combined
-                if (prev_trn_loss_combined == 0):
-                    rat_trn_loss = 100
-                else:
-                    rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
-                if (prev_val_loss_combined == 0):
-                    rat_val_loss = 100
-                else:
-                    rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
-                if (prev_trn_acc_combined == 0):
-                    rat_trn_acc = 100
-                else:
-                    rat_trn_acc  = 100 * round(trn_acc_combined / prev_trn_acc_combined - 1.0, ndigits=4)
-                if (prev_val_acc_combined == 0):
-                    rat_val_acc = 100
-                else:
-                    rat_val_acc  = 100 * round(val_acc_combined / prev_val_acc_combined - 1.0, ndigits=4)
+                if i > 0:
+                    diff_trn_acc = trn_acc_combined - prev_trn_acc_combined
+                    diff_val_acc = val_acc_combined - prev_val_acc_combined
+                    diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
+                    diff_val_loss = val_loss_combined - prev_val_loss_combined
+                    if (prev_trn_loss_combined == 0):
+                        rat_trn_loss = 100
+                    else:
+                        rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
+                    if (prev_val_loss_combined == 0):
+                        rat_val_loss = 100
+                    else:
+                        rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
+                    if (prev_trn_acc_combined == 0):
+                        rat_trn_acc = 100
+                    else:
+                        rat_trn_acc  = 100 * round(trn_acc_combined / prev_trn_acc_combined - 1.0, ndigits=4)
+                    if (prev_val_acc_combined == 0):
+                        rat_val_acc = 100
+                    else:
+                        rat_val_acc  = 100 * round(val_acc_combined / prev_val_acc_combined - 1.0, ndigits=4)
+                    
+                    diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
+                    diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
+                    rat_trn_loss_str  = '{0:+.2f}'.format(rat_trn_loss).rjust(4, ' ')
+                    rat_val_loss_str  = '{0:+.2f}'.format(rat_val_loss).rjust(4, ' ')
+
+                    diff_trn_acc_str = '{0:+.4f}'.format(diff_trn_acc)
+                    diff_val_acc_str = '{0:+.4f}'.format(diff_val_acc)
+                    rat_trn_acc_str  = '{0:+.2f}'.format(rat_trn_acc).rjust(4, ' ')
+                    rat_val_acc_str  = '{0:+.2f}'.format(rat_val_acc).rjust(4, ' ')
                 
-                diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
-                diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
-                rat_trn_loss_str  = '{0:+.2f}'.format(rat_trn_loss).rjust(4, ' ')
-                rat_val_loss_str  = '{0:+.2f}'.format(rat_val_loss).rjust(4, ' ')
+                    trn_color = 31 if diff_trn_loss >= 0 else 32  # green or red
+                    val_color = 31 if diff_val_loss >= 0 else 32  # green or red
+                    trn_loss_change_str  = f'  abs: {util.phyddle_str(diff_trn_loss_str, style=0, color=trn_color)}'
+                    trn_loss_change_str += f'  rel: {util.phyddle_str(rat_trn_loss_str, style=0, color=trn_color)}%'
+                    val_loss_change_str  = f'  abs: {util.phyddle_str(diff_val_loss_str, style=0, color=val_color)}'
+                    val_loss_change_str += f'  rel: {util.phyddle_str(rat_val_loss_str, style=0, color=val_color)}%'
 
-                diff_trn_acc_str = '{0:+.4f}'.format(diff_trn_acc)
-                diff_val_acc_str = '{0:+.4f}'.format(diff_val_acc)
-                rat_trn_acc_str  = '{0:+.2f}'.format(rat_trn_acc).rjust(4, ' ')
-                rat_val_acc_str  = '{0:+.2f}'.format(rat_val_acc).rjust(4, ' ')
-            
-                trn_color = 31 if diff_trn_loss >= 0 else 32  # green or red
-                val_color = 31 if diff_val_loss >= 0 else 32  # green or red
-                trn_loss_change_str  = f'  abs: {util.phyddle_str(diff_trn_loss_str, style=0, color=trn_color)}'
-                trn_loss_change_str += f'  rel: {util.phyddle_str(rat_trn_loss_str, style=0, color=trn_color)}%'
-                val_loss_change_str  = f'  abs: {util.phyddle_str(diff_val_loss_str, style=0, color=val_color)}'
-                val_loss_change_str += f'  rel: {util.phyddle_str(rat_val_loss_str, style=0, color=val_color)}%'
+                    trn_acc_change_str  = f'  abs: {util.phyddle_str(diff_trn_acc_str, style=0, color=trn_color)}'
+                    trn_acc_change_str += f'  rel: {util.phyddle_str(rat_trn_acc_str, style=0, color=trn_color)}%'
+                    val_acc_change_str  = f'  abs: {util.phyddle_str(diff_val_acc_str, style=0, color=val_color)}'
+                    val_acc_change_str += f'  rel: {util.phyddle_str(rat_val_acc_str, style=0, color=val_color)}%'
+                    trn_loss_str += trn_loss_change_str
+                    val_loss_str += val_loss_change_str
 
-                trn_acc_change_str  = f'  abs: {util.phyddle_str(diff_trn_acc_str, style=0, color=trn_color)}'
-                trn_acc_change_str += f'  rel: {util.phyddle_str(rat_trn_acc_str, style=0, color=trn_color)}%'
-                val_acc_change_str  = f'  abs: {util.phyddle_str(diff_val_acc_str, style=0, color=val_color)}'
-                val_acc_change_str += f'  rel: {util.phyddle_str(rat_val_acc_str, style=0, color=val_color)}%'
-                trn_loss_str += trn_loss_change_str
-                val_loss_str += val_loss_change_str
+                    trn_acc_str += trn_acc_change_str
+                    val_acc_str += val_acc_change_str
 
-                trn_acc_str += trn_acc_change_str
-                val_acc_str += val_acc_change_str
+                    if diff_val_loss >= 0:
+                        val_bad_count += 1
+                    else:
+                        val_bad_count = 0
 
-                if diff_val_loss >= 0:
-                    val_bad_count += 1
-                else:
-                    val_bad_count = 0
+                prev_trn_loss_combined = trn_loss_combined
+                prev_val_loss_combined = val_loss_combined
 
-            prev_trn_loss_combined = trn_loss_combined
-            prev_val_loss_combined = val_loss_combined
-
-            prev_trn_acc_combined = trn_acc_combined
-            prev_val_acc_combined = val_acc_combined
-            # display training metric progress
-            print(trn_loss_str, trn_acc_str)
-            print("")
-            print(val_loss_str, val_acc_str)
-            print('')
+                prev_trn_acc_combined = trn_acc_combined
+                prev_val_acc_combined = val_acc_combined
+                # display training metric progress
+                print(trn_loss_str, trn_acc_str)
+                print("")
+                print(val_loss_str, val_acc_str)
+                print('')
 
             # update train history log
             self.update_train_history(i, metric_names, train_metric_vals, 'train')
@@ -1212,6 +1267,7 @@ class CnnTrainer(Trainer):
         terms for the training dataset.
 
         """
+        print("CPI CALIBRATION")
 
         # temporarily switch to CPU
         # self.model.to('cpu')
@@ -1225,9 +1281,8 @@ class CnnTrainer(Trainer):
             print(f'Calib step {step + 1}:')
             print()
         calib_batch = next(iter(calib_loader))
-        third_arg = calib_batch[3]
+        calib_graph_dat, calib_idx_dat, calib_lbl_num, calib_lbl_cat = calib_batch
         #calib_phy_dat, calib_graph_dat, calib_aux_dat = calib_batch[0], calib_batch[1], calib_batch[2], third_arg
-        calib_graph_dat = calib_batch[0]
 
         # calib_phy_dat = calib_phy_dat.to('cpu')
         # calib_aux_dat = calib_aux_dat.to('cpu')
@@ -1236,7 +1291,11 @@ class CnnTrainer(Trainer):
         print("----------------\ncalib est\n\n")
 
         #calib_label_est = self.model(calib_phy_dat, calib_graph_dat, calib_aux_dat)
-        calib_label_est = self.model(calib_graph_dat)
+        try:
+            calib_label_est = self.model(calib_graph_dat)
+        except Exception as e:
+            print("calib exception", e)
+            quit()
 
         # make CPI adjustments
         norm_calib_label_num_est = torch.stack(calib_label_est[0:3]).cpu().detach().numpy()
@@ -1262,10 +1321,11 @@ class CnnTrainer(Trainer):
         input and output datasets.
 
         """
+
+        print("make results function")
         
         # get uncalibrated estimates
         # training label estimates
-        num_train_examples = 1000
         train_loader = DataLoader(dataset=self.train_dataset,
                                                    batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_train_examples)
 
@@ -1274,14 +1334,15 @@ class CnnTrainer(Trainer):
         #     #print(data)
                                       
 
-        train_batch = next(iter(train_loader))
-        #train_phy_dat, train_graph_dat,train_aux_dat, train_idx_dat, train_labels_num, train_labels_cat = train_batch
-        train_graph_dat, train_idx_dat, train_labels_num, train_labels_cat = train_batch
+        #train_batch = next(iter(train_loader))
+        # for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
+
+        for j, (train_graph_dat, train_idx_dat, train_labels_num, train_labels_cat) in enumerate(train_loader):
 
         #train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
         #train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
-        train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
-        train_labels_cat = train_labels_cat.to(self.TORCH_DEVICE)
+            train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
+            train_labels_cat = train_labels_cat.to(self.TORCH_DEVICE)
         #train_graph_dat = train_graph_dat.to(self.TORCH_DEVICE)
 
         #train_nodes_dat = [z.to(self.TORCH_DEVICE) for z in train_nodes_dat]
@@ -1290,61 +1351,85 @@ class CnnTrainer(Trainer):
         #       because DataLoader batches are indexed in same order
         
         # get train estimates
-        label_est = self.model(train_graph_dat)
+            label_est = self.model(train_graph_dat)
         #label_est = self.model(train_phy_dat, train_graph_dat, train_aux_dat)
 
         
         # numerical vs. cat estimates
-        labels_num_est = label_est[0:3]
-        labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
-        labels_cat_est = label_est[3]
+            labels_num_est = label_est[0:3]
+            labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
+            labels_cat_est = label_est[3]
 
 
-        if self.has_label_num:
-            train_labels_num = train_labels_num.cpu().detach().numpy()
-            self.train_label_num_true = train_labels_num
-            
-            # uncalibrated training estimates of numerical labels
-            self.train_label_num_est = labels_num_est.copy()
-            # self.train_label_num_est = util.denormalize(labels_num_est.copy(),
-            #                                             self.train_labels_num_mean_sd)
-            
-            # self.train_label_num_est = util.denormalize(self.train_label_num_est.copy(),
-            
-            # # TODO: something is wrong with de/normalizing labels??
-            # print(labels_num_est.shape)
-            # pn = labels_num_est[0,:,0]
-            # pu = self.train_label_num_est[0,:,0]
-            # mm = self.train_labels_num_mean_sd[0][0]
-            # ss = self.train_labels_num_mean_sd[1][0]
-            # print('pn=',pn)
-            # print('pu=',pu)
-            # print('mean=',mm)
-            # print('sd=',ss)
-            # print( pu * ss + mm )
-            #print(self.train_label_num_est)
 
-            # generate calibration factors
-            self.perform_cpi_calibration()
+            if self.has_label_num:
+                train_labels_num = train_labels_num.cpu().detach().numpy()
+                if self.train_label_num_true == None:
+                    train_label_num_true = train_labels_num
+                else:
+                    self.train_label_num_true = np.append(self.train_label_num_true, train_labels_num)
+                
+                # uncalibrated training estimates of numerical labels
+                self.train_label_num_est = labels_num_est.copy()
+                if self.train_label_num_est == None:
+                    train_label_num_est = labels_num_est.copy()
+                else:
+                    self.train_label_num_est = np.append(self.train_label_num_est, labels_num_est.copy())
+                # self.train_label_num_est = util.denormalize(labels_num_est.copy(),
+                #                                             self.train_labels_num_mean_sd)
+                
+                # self.train_label_num_est = util.denormalize(self.train_label_num_est.copy(),
+                
+                # # TODO: something is wrong with de/normalizing labels??
+                # print(labels_num_est.shape)
+                # pn = labels_num_est[0,:,0]
+                # pu = self.train_label_num_est[0,:,0]
+                # mm = self.train_labels_num_mean_sd[0][0]
+                # ss = self.train_labels_num_mean_sd[1][0]
+                # print('pn=',pn)
+                # print('pu=',pu)
+                # print('mean=',mm)
+                # print('sd=',ss)
+                # print( pu * ss + mm )
+                #print(self.train_label_num_est)
 
-            # calibrate original estimates
-            labels_num_est_calib = labels_num_est.copy()
-            labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
-            labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
-            
-            # denormalize calibrated estimates
-            self.train_label_num_est_calib = labels_num_est_calib
+                # generate calibration factors
+                self.perform_cpi_calibration()
 
-        # reformat categorical estimates, if they exist
-        if self.has_label_cat:
-            self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
+                # calibrate original estimates
+                labels_num_est_calib = labels_num_est.copy()
+                labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
+                labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
+                
+                # denormalize calibrated estimates
+                if self.train_label_num_est_calib == None:
+                    train_label_num_est_calib = labels_num_est_calib
+                else:
+                    self.train_label_num_est_calib = np.append(self.train_label_num_true, labels_num_est_calib)
+                # self.train_label_num_est_calib = labels_num_est_calib
 
-            self.train_label_cat_est = pd.DataFrame((labels_cat_est).detach().cpu().numpy().astype('float')) #self.format_label_cat(labels_cat_est)
+            # reformat categorical estimates, if they exist
+            if self.has_label_cat:
+                if self.train_label_cat_true == None:
+                    self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
+                else:
+                    self.train_label_cat_true = np.append(self.train_label_num_true, train_labels_cat.cpu().detach().numpy().astype('int'))
+                #self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
 
-        else:
-            print("no label cat")
-        print("returning from make results")
-        return
+                if self.train_label_cat_est == None:
+                    self.train_label_cat_est = pd.DataFrame((labels_cat_est.cpu().detach().argmax(dim=1).flatten())) #self.format_label_cat(labels_cat_est)
+                else:
+                    self.train_label_cat_est.append(pd.DataFrame((labels_cat_est.cpu().detach().argmax(dim=1).flatten()))) #self.format_label_cat(labels_cat_est)
+                print("train_label_cat_true")
+                print(self.train_label_cat_true )
+                print("train_label_cat_est")
+                print(self.train_label_cat_est)
+                print("accuracy:")
+                print(((self.train_label_cat_true == self.train_label_cat_est).sum())/len(self.train_label_cat_true))
+            else:
+                print("no label cat")
+            print("returning from make results")
+            return
 
     def format_label_cat(self, x):
         """Formats categorical labels.
@@ -1371,43 +1456,45 @@ class CnnTrainer(Trainer):
         CPI adjustment terms, and the training history.
 
         """
-        max_idx = 1000
+        # max_idx = 1000
 
         path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
         
         # output network model info
-        model_arch_fn                = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        model_history_fn             = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
-        model_cpi_fn                 = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.cpi_adjustments.csv'
+        model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
+        model_cpi_fn                 = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.cpi_adjustments.csv'
         # model_weights_fn           = f'{path_prefix}.train_weights.hdf5'
         
         # output scaling terms
-        train_labels_num_norm_fn    = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.labels_num.csv'
-        train_aux_data_norm_fn       = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.aux_data.csv'
+        train_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.labels_num.csv'
+        train_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.aux_data.csv'
 
         # output training labels
-        train_label_num_true_fn     = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
-        train_label_num_est_fn      = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
-        train_label_est_nocalib_fn   = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num_nocalib.csv'
-        train_label_cat_true_fn      = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
-        train_label_cat_est_fn       = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
+        train_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
+        train_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
+        train_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num_nocalib.csv'
+        train_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
+        train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
         
         # save model to file
         torch.save(self.model, model_arch_fn)
 
         # save json history from running MASTER
         self.train_history.to_csv(model_history_fn, index=False, sep=',',
-                                  float_format=util.PANDAS_FLOAT_FMT_STR)
+                                  float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
 
         # save aux_data names, means, sd for new test dataset normalization
         df_aux_data = pd.DataFrame({'name':self.aux_data_names,
                                     'mean':self.train_aux_data_mean_sd[0],
                                     'sd':self.train_aux_data_mean_sd[1]})
         df_aux_data.to_csv(train_aux_data_norm_fn, index=False, sep=',',
-                           float_format=util.PANDAS_FLOAT_FMT_STR)
+                           float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
         
         # training example index
-        df_train_label_idx = pd.DataFrame(self.train_label_index[0:max_idx,:], columns=['idx'])
+        df_train_label_idx = pd.DataFrame(self.train_label_index, columns=['idx'])
+        print("df_train_label_idx")
+        print(df_train_label_idx)
  
         if self.has_label_num:
             # save label names, means, sd for new test dataset normalization
@@ -1415,17 +1502,17 @@ class CnnTrainer(Trainer):
                                       'mean':self.train_labels_num_mean_sd[0],
                                       'sd':self.train_labels_num_mean_sd[1]})
             df_labels.to_csv(train_labels_num_norm_fn, index=False, sep=',',
-                             float_format=util.PANDAS_FLOAT_FMT_STR)
+                             float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
     
             # save CPI intervals
             df_cpi_intervals = pd.DataFrame(self.cpi_adjustments,
                                             columns=self.param_num_names)
             df_cpi_intervals.to_csv(model_cpi_fn,
                                     index=False, sep=',',
-                                    float_format=util.PANDAS_FLOAT_FMT_STR)
+                                    float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
             
             # downsample all true training labels
-            df_train_label_true = pd.DataFrame(self.train_label_num_true[0:max_idx,:],
+            df_train_label_true = pd.DataFrame(self.train_label_num_true,
                                                columns=self.param_num_names )
             
             # save true values for train numerical labels
@@ -1437,16 +1524,16 @@ class CnnTrainer(Trainer):
             
             df_train_label_num_true.to_csv(train_label_num_true_fn,
                                             index=False, sep=',',
-                                            float_format=util.PANDAS_FLOAT_FMT_STR)
+                                            float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
             
             # save train numerical label estimates
             self.train_label_num_est = util.denormalize(self.train_label_num_est,
                                                         self.train_labels_num_mean_sd)
             self.train_label_num_est_calib = util.denormalize(self.train_label_num_est_calib,
                                                               self.train_labels_num_mean_sd)
-            df_train_label_num_est_nocalib = util.make_param_VLU_mtx(self.train_label_num_est[0:max_idx,:],
+            df_train_label_num_est_nocalib = util.make_param_VLU_mtx(self.train_label_num_est,
                                                                       self.param_num_names )
-            df_train_label_num_est_calib   = util.make_param_VLU_mtx(self.train_label_num_est_calib[0:max_idx,:],
+            df_train_label_num_est_calib   = util.make_param_VLU_mtx(self.train_label_num_est_calib,
                                                                       self.param_num_names )
             df_train_label_num_est_calib = pd.concat([df_train_label_idx,
                                                      df_train_label_num_est_calib], axis=1 )
@@ -1460,18 +1547,18 @@ class CnnTrainer(Trainer):
             # convert to csv and save
             df_train_label_num_est_nocalib.to_csv(train_label_est_nocalib_fn,
                                                    index=False, sep=',',
-                                                   float_format=util.PANDAS_FLOAT_FMT_STR)
+                                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
             df_train_label_num_est_calib.to_csv(train_label_num_est_fn,
                                                  index=False, sep=',',
-                                                 float_format=util.PANDAS_FLOAT_FMT_STR)
+                                                 float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
     
         if self.has_label_cat:
             # save true values for train categ. labels
-            df_train_label_cat_true = pd.DataFrame(self.train_label_cat_true[0:max_idx,:],
+            df_train_label_cat_true = pd.DataFrame(self.train_label_cat_true,
                                                    columns=self.param_cat_names )
             df_train_label_cat_true = pd.concat([df_train_label_idx, df_train_label_cat_true], axis=1 )
             df_train_label_cat_true.to_csv(train_label_cat_true_fn,
-                                           index=False, sep=',')
+                                           index=False, sep=',', mode='a')
     
             # save train categorical label estimates
             #print(self.train_label_cat_est)
@@ -1480,7 +1567,7 @@ class CnnTrainer(Trainer):
             df_train_label_cat_est = pd.concat([df_train_label_idx, df_train_label_cat_est], axis=1 )
             df_train_label_cat_est.to_csv(train_label_cat_est_fn,
                                           index=False, sep=',',
-                                          float_format=util.PANDAS_FLOAT_FMT_STR)
+                                          float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
         print("returning from save results")
 
         return

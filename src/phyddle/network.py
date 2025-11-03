@@ -66,8 +66,8 @@ class GCN_PhyloPool(torch.nn.Module):
         torch.manual_seed(12345)
         self.n_parts = 10
         ker_size = 5
-        self.gconv1 = GCNConv(num_node_features, hidden_channels) #GCNConv
-        self.gconv2 = GCNConv(hidden_channels, hidden_channels)
+        self.gconv1 = GraphConv(num_node_features, hidden_channels) #GCNConv
+        self.gconv2 = GraphConv(hidden_channels, hidden_channels)
         self.conv1 = nn.Conv1d(hidden_channels, 2*hidden_channels, kernel_size=ker_size)
         self.conv2= nn.Conv1d(2*hidden_channels, 4*hidden_channels, kernel_size=ker_size)
         self.conv3= nn.Conv1d(4*hidden_channels, 8*hidden_channels, kernel_size=ker_size)
@@ -98,31 +98,31 @@ class GCN_PhyloPool(torch.nn.Module):
         batch_size = batch.max().item() + 1
         x = self.gconv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.01, training=self.training)
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
         x = self.gconv2(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.01, training=self.training)
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
 
         x, num_nodes = to_dense_batch(x, batch)
         x_padded = x.permute(0,2,1)
         x_padded = self.conv1(x_padded)
         x_padded = F.relu(x_padded)
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training)
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
         x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
         
         x_padded = self.conv2(x_padded)
         x_padded = F.relu(x_padded)
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training)
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
         x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
 
         x_padded = self.conv3(x_padded)
-        x_padded = F.relu(x_padded)
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training)   
+        x_padded = F.relu(x_padded) 
+        x_padded = F.dropout(x_padded, p=0.01, training=self.training)   # p = 0.01
         x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
      
 
 
-        x = F.dropout(x, p=0.01, training=self.training)
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
         valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
         selected_nodes_list = []
         for i, valid in enumerate (valid_nodes):
@@ -147,7 +147,7 @@ class GCN_PhyloPool(torch.nn.Module):
         selected_nodes = selected_nodes.permute(0,2,1)
         selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
         out = F.relu(self.lin1(selected_nodes_flattened))
-        out = F.dropout(out, p=0.001, training=self.training)
+        out = F.dropout(out, p=0.01, training=self.training)
         out = self.lin2(out)
 
 
@@ -237,7 +237,7 @@ class GCN(torch.nn.Module):
         #print(x)
 
         # 3. Apply a final classifier
-        x = F.dropout(x, p=0.2, training=self.training)
+        x = F.dropout(x, p=0.01, training=self.training)
         x = self.lin(x)
 
 
@@ -275,6 +275,10 @@ class Dataset(Geoset):
         i = 0
         num_nodes = num_nodes.astype(int)
         num_edges = num_edges.astype(int)
+        if num_nodes[0] != num_edges[0] + 1:
+            print("nodes:", num_nodes)
+            print("edges:", num_edges)
+            quit()
         prev_edge_ind = 0
         prev_node_ind = 0
         # print("edges:")
@@ -678,14 +682,15 @@ class CrossEntropyLoss(nn.Module):
         targets = targets.flatten().long() #.long()
         predictions = predictions.float()
         weights = 1 / torch.bincount(targets).float()
+        # print("weights:", weights)
         weight_tensor = targets.clone().float()
-        zero_indices = weight_tensor == 0
-        one_indices =  weight_tensor == 1
-        if len(zero_indices) == 0 or len(one_indices) == 0:
+        if len(weight_tensor) < 4 or min(weight_tensor) == 0:
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
         else:
-            weight_tensor[zero_indices] = weights[0]
-            weight_tensor[one_indices] = weights[1]
+            weight_tensor[weight_tensor == 0] = weights[0]
+            weight_tensor[weight_tensor == 1] = weights[1]
+            weight_tensor[weight_tensor == 2] = weights[2]
+            weight_tensor[weight_tensor == 3] = weights[3]
         #targets = targets.float()
             weight_tensor = weight_tensor.flatten().unsqueeze(1)   
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
