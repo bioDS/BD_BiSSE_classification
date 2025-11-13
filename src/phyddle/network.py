@@ -254,6 +254,8 @@ class Dataset(Geoset):
     """
     # Constructor
     def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
+        print("phy_data:", phy_data.shape)
+        # quit()
         self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
         self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
         self.idx_data    = torch.from_numpy(idx_data.astype('int'))
@@ -262,6 +264,7 @@ class Dataset(Geoset):
         self.len         = len(self.labels_num) #self.labels_num.shape[0]
 
         edges_data = torch.from_numpy(edges_data.astype('int'))
+        print("initial edges shape", edges_data.shape)
         min_index =   edges_data.min()
         edges_data = torch.sub(edges_data, min_index)
         unique = torch.unique(edges_data)
@@ -273,8 +276,8 @@ class Dataset(Geoset):
         self.graph_dat = []
         self.id_list = graph_ids
         i = 0
-        num_nodes = num_nodes.astype(int)
-        num_edges = num_edges.astype(int)
+        num_nodes = num_nodes.astype(np.int64)
+        num_edges = num_edges.astype(np.int64)
         if num_nodes[0] != num_edges[0] + 1:
             print("nodes:", num_nodes)
             print("edges:", num_edges)
@@ -286,12 +289,33 @@ class Dataset(Geoset):
         # print(edges_data.shape)
         for i in range(len(graph_ids)):
             # print("graph =", graph_ids[i], "nodes: ", num_nodes[i], "edges:", num_edges[i])
-            current_edge_ind = prev_edge_ind + int(num_edges[i])
-            current_node_ind = prev_node_ind + int(num_nodes[i])
+            # print("previous node index:", prev_node_ind)
+            current_edge_ind = prev_edge_ind + num_edges[i].astype(np.int64)[0]
+            current_node_ind = prev_node_ind + num_nodes[i].astype(np.int64)[0]
+            # print("num nodes:", int(num_nodes[i]))
+
             selected_nodes = node_data[prev_node_ind:current_node_ind]
             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
         
-            #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+            if (selected_nodes.shape[0] != selected_edges.shape[1] + 1):
+                print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+
+                print("MISMATCH!!!!")
+                
+                print(selected_nodes)
+                print(selected_edges)
+                print("num nodes: ", num_nodes[i])
+                print("num edges:", num_edges[i])
+                print("total num nodes", np.sum(num_nodes, dtype=np.int64))
+                print("total num edges", np.sum(num_edges, dtype=np.int64))
+                print(graph_ids[i])
+                print("total length node data", len(node_data))
+                print("total length edge data", len(edges_data[1]))
+                print("current node index:", current_node_ind, "current edge index", current_edge_ind)
+                print("total number of graph ids:", len(graph_ids))
+                print("total number of num_edges:", len(num_edges))
+                print("total number of num nodes:", len(num_nodes))
+                quit()
             self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
             prev_edge_ind = current_edge_ind
             prev_node_ind = current_node_ind
@@ -684,7 +708,7 @@ class CrossEntropyLoss(nn.Module):
         weights = 1 / torch.bincount(targets).float()
         # print("weights:", weights)
         weight_tensor = targets.clone().float()
-        if len(weight_tensor) < 4 or min(weight_tensor) == 0:
+        if len(weight_tensor) < 2 or min(weight_tensor) == 0: #< 4
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
         else:
             weight_tensor[weight_tensor == 0] = weights[0]

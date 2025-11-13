@@ -157,6 +157,7 @@ class Formatter:
         self.log_offset         = float(args['log_offset'])
         self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
         self.save_graph_csv = bool(args['save_graph_csv'])
+        self.select_classes = list(args['select_classes'])
         
         # set number of processors
         if self.num_proc <= 0:
@@ -424,6 +425,14 @@ class Formatter:
                                         'aux': i[7],
                                         'lbl': i[8]}
 
+                if i[6] != len(i[2]):
+                    print(i[3])
+                    print(i[4])
+                    print("MISSMATCH!")
+                    print(i[6])
+                    print(len(i[2]))
+                    quit()
+
         return
     
     def get_rep_idx(self, mode='sim'):
@@ -548,7 +557,7 @@ class Formatter:
         print(f'Making {data_str} hdf5 dataset: {num_samples} examples for tree width = {tree_width}')
 
         # HDF5 file
-        out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.hdf5'
+        out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.new.hdf5' #remove new!
 
         with h5py.File(out_hdf5_fn, 'w') as hdf5_file:
 
@@ -957,6 +966,10 @@ class Formatter:
         labels = None
         if mode == 'sim' or len(self.param_data) > 0:
             labels = pd.read_csv(lbl_fn, header=0)
+            # print("labels:", labels)
+            if labels['model_type'].iloc[0] not in self.select_classes:
+                # print("bad class")
+                return None
             
         # process parameters to estimate
         param_est = pd.DataFrame()

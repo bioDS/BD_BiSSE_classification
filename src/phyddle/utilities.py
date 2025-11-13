@@ -170,6 +170,7 @@ def settings_registry():
         'tensor_format':       {'step': 'FTEP',  'type': str,   'section': 'Format',  'default': 'hdf5',          'help': 'File format for training example tensors', 'choices': ['csv', 'hdf5']},
         'save_phyenc_csv':     {'step': 'F',     'type': str,   'section': 'Format',  'default': 'F',             'help': 'Save encoded phylogenetic tensor encoding to csv?', 'bool': True},
         'save_graph_csv':       {'step':'F', 'type':str, 'section':'Format', 'default':'F',                     'help': 'Save graph encoding', 'bool': True},
+        'select_classes':       {'step':'F', 'type': list,  'section':'Format', 'default': [0,1,2,3],           'help':  'Categorical classes to use for encoding if not all'},
 
         # training options
         'network_type':         {'step':'TEP',      'type': str,    'section':'Train', 'default':'CNN',             'help': 'CNN or GNN architecture'},
@@ -206,6 +207,7 @@ def settings_registry():
         # estimating options
         'warn_aux_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.0001,      'help': 'Percentile to detect extreme empirical auxiliary (abs.) values.'},
         'warn_lbl_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.01,        'help': 'Percentile to detect extreme empirical label (abs.) values.'},
+        'num_classes':           {'step': 'EP',     'type': int,    'section': 'Estimate', 'default':4, 'help': 'Number of categorical classes used for training'},
 
         # plotting options
         'plot_train_color'  : {'step': 'P', 'type': str,    'section': 'Plot', 'default': 'blue',       'help': 'Plotting color for training data elements'},

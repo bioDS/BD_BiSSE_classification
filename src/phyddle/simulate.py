@@ -16,6 +16,9 @@ import sys
 import os
 import shutil
 import subprocess
+import numpy as np
+import math
+from functools import partial
 
 # external imports
 from multiprocessing import Pool, set_start_method, cpu_count
@@ -95,6 +98,10 @@ class Simulator:
         self.num_char           = int(args['num_char'])
         self.num_trees          = int(args['num_trees'])
         self.verbose            = bool(args['verbose'])
+
+        print("start idx", self.start_idx)
+        print("end idx", self.end_idx)
+
         
         # validate sim_command
         self.validate_sim_command()
@@ -233,6 +240,15 @@ class Simulator:
 
         # simulate replicate IDs to generate
         self.rep_idx = self.get_rep_idx()
+        print("rep idx", self.rep_idx)
+        self.bins_start = np.linspace(100,(1000-(900/20)),20)
+        self.bins_end = np.linspace((100+(900/20)),1000,20)
+        self.bins_start = self.bins_start[0:(self.end_idx - self.start_idx)]
+        self.bins_end = self.bins_end[0:(self.end_idx - self.start_idx)]
+        print("self.bins", self.bins_start)
+        print("self.bins", self.bins_end)
+        print("num trees", (self.end_idx - self.start_idx))
+
         
         # dispatch jobs
         util.print_str('▪ Simulating raw data', verbose)
@@ -248,8 +264,8 @@ class Simulator:
             # - worth testing more, though
             with Pool(processes=self.num_proc) as pool:
                 res = list(
-                     tqdm(
-                        pool.imap(self.sim_one, self.rep_idx, chunksize=1),
+                     tqdm(pool.imap(self.sim_one, zip(self.rep_idx, self.bins_start, self.bins_end),
+                        chunksize=1),
                         total=len(self.rep_idx),
                         desc='Simulating',
                         smoothing=0)
@@ -257,7 +273,7 @@ class Simulator:
             
         else:
             # serial jobs
-            res = [ self.sim_one(idx) for idx in tqdm(self.rep_idx,
+            res = [ self.sim_one(idx, k) for idx, k in tqdm(zip(self.rep_idx, self.bins_start, self.bins_end),
                                                       total=len(self.rep_idx),
                                                       desc='Simulating',
                                                       smoothing=0) ]
@@ -275,7 +291,7 @@ class Simulator:
         return
     
     # main simulation function (looped)
-    def sim_one(self, idx):
+    def sim_one(self, args):
         """
         Executes a single simulation.
 
@@ -303,9 +319,13 @@ class Simulator:
         Args:
             idx (int): The index of the simulation iteration.
         """
+        idx, min_taxa, max_taxa = args
+        min_taxa = int(min_taxa)
+        max_taxa = int(max_taxa)
+        print("passed args", idx, min_taxa, max_taxa)
         # get filesystem info for generic job
         # tmp_fn     = f'{self.sim_dir}/{self.sim_prefix}.{idx}'
-        cmd_str    = f'{self.sim_command} {self.sim_dir} {self.sim_prefix} {idx} {self.sim_batch_size}'
+        cmd_str    = f'{self.sim_command} {self.sim_dir} {self.sim_prefix} {idx} {self.sim_batch_size} {min_taxa} {max_taxa}'
         # stdout_fn  = f'{tmp_fn}.stdout.log'
         # stderr_fn  = f'{tmp_fn}.stderr.log'
         # run generic job

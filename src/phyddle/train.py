@@ -297,7 +297,6 @@ class CnnTrainer(Trainer):
         # initialize base class
         super().__init__(args)
         
-        self.num_classes=4# 1
         self.aux_data_names = list()    # init with load_input()
         self.label_names    = list()    # init with load_input()
         self.num_aux_data   = int()     # init with load_input()
@@ -471,6 +470,16 @@ class CnnTrainer(Trainer):
         # print(full_labels_cat)
         # print("full_labels_num")
         # print(full_labels_num)
+        # print("length of node attributes")
+        # print(len(full_node_attributes))
+        # print(full_node_attributes)
+        # print("total num_nodes")
+        # print((full_num_nodes.astype(int).sum()))
+        # print("length of edges")
+        # print(len(full_node_1_data))
+        # print("total num_edges")
+        # print((full_num_edges.astype(int).sum()))
+        # quit()
         
         # data dimensions
         num_sample             = full_phy_data.shape[0]
@@ -479,23 +488,29 @@ class CnnTrainer(Trainer):
         self.num_aux_data      = full_aux_data.shape[1]
         
         # shuffle datasets
-        randomized_idx     = np.random.permutation(full_phy_data.shape[0])
+        randomized_idx     =  np.random.permutation(full_phy_data.shape[0]) # np.arange(full_phy_data.shape[0]) #
         print("randomized idx")
         print(randomized_idx)
         unique_ids = np.unique(full_graph_ids)
         #for (unique_id in unique_ids):
 
-        cumulative_edges = np.insert(np.cumsum(full_num_edges), 0, 0).astype(int)
-        cumulative_nodes = np.insert(np.cumsum(full_num_nodes), 0, 0).astype(int)
-        print("cumulative edges")
-        print(cumulative_edges)
-        print("cumulative nodes")
-        print(cumulative_nodes)
+        cumulative_edges = np.insert(np.cumsum(full_num_edges, dtype=np.int64), 0, 0)
+        cumulative_nodes = np.insert(np.cumsum(full_num_nodes, dtype=np.int64), 0, 0)
+        # print("cumulative edges")
+        # print(cumulative_edges)
+        # print("cumulative nodes")
+        # print(cumulative_nodes)
         split_edges = np.split(full_edges_matrix, cumulative_edges[1:])
 
         joined_edges = np.concatenate([split_edges[x] for x in randomized_idx])
         split_nodes = np.split(full_node_attributes, cumulative_nodes[1:])
+        print("length split nodes")
+        print(len(split_nodes))
         joined_nodes = np.concatenate([split_nodes[x] for x in randomized_idx])
+        
+        print(np.sum(full_num_nodes).astype(np.int64))
+        print(np.sum(full_num_nodes, dtype=np.int64))
+
         full_num_nodes = full_num_nodes[randomized_idx]
         full_num_edges = full_num_edges[randomized_idx]
         full_phy_data      = full_phy_data[randomized_idx,:]
@@ -509,11 +524,23 @@ class CnnTrainer(Trainer):
         # reshape phylogenetic tensor data based on CPV+S
         full_phy_data.shape = (num_sample, -1, self.num_data_col)
 
+        self.num_classes = len(np.unique(full_labels_cat))
+        print("num classes = ", self.num_classes)
+        print(len(full_node_attributes))
+        print(full_num_nodes.dtype)
+        print(np.sum(full_num_nodes, dtype=np.int64))
+
+
+        for r in range(len(full_num_nodes)):
+            if full_num_nodes[r] != full_num_edges[r] + 1:
+                print(full_idx_data[r], full_num_nodes[r], full_num_edges[r])
+                quit()
 
         # split dataset into training, test, validation, and calibration parts
         train_idx, val_idx, calib_idx = self.split_tensor_idx(num_sample)
         self.validate_tensor_idx(train_idx, val_idx, calib_idx)
         print("train idx: " + str(train_idx))
+        print("LENGTH OF TRAINING DATA", len(train_idx))
         print("val idx: " + str(val_idx))
         print("calib idx: " + str(calib_idx))
         
@@ -557,6 +584,7 @@ class CnnTrainer(Trainer):
         calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
 
 
+
         train_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in train_idx]))
         val_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in val_idx]))
         calib_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in calib_idx]))
@@ -581,17 +609,27 @@ class CnnTrainer(Trainer):
         calib_num_edges = full_num_edges[calib_idx]
         val_num_nodes = full_num_nodes[val_idx]
         val_num_edges = full_num_edges[val_idx]
+
+        print("training data dim")
+        print(len(train_node_attr_tensor))
+        print(np.sum(train_num_nodes, dtype=np.int64))
+
         print("ids:")
         print("train:", train_ids)
         print("val:", val_ids)
         print("calib:", calib_ids)
         print("training labels")
-        print("label 1:", sum(train_labels_cat))
-        print("label 0:", (len(train_labels_cat) - sum(train_labels_cat)))
+        print("label 0:", sum(train_labels_cat ==0))
+        print("label 1:", sum(train_labels_cat ==1))
+        print("label 2:", sum(train_labels_cat ==2))
+        print("label 3:", sum(train_labels_cat ==3))
+
         print("validation labels")
         print(val_labels_cat)
-        print("label 1:", sum(val_labels_cat))
-        print("label 0:", (len(val_labels_cat) - sum(val_labels_cat)))
+        print("label 0:", sum(val_labels_cat ==0))
+        print("label 1:", sum(val_labels_cat ==1))
+        print("label 2:", sum(val_labels_cat ==2))
+        print("label 3:", sum(val_labels_cat ==3))
         
 
 
@@ -837,7 +875,7 @@ class CnnTrainer(Trainer):
 
         #checkpointing code from https://medium.com/@piyushkashyap045/how-to-save-and-load-checkpoints-for-training-a-cnn-with-pytorch-e17395cdbd3d
         if self.load_model:
-            checkpoint = torch.load(f'{self.trn_dir}'+"/checkpoint.tar")
+            checkpoint = torch.load("sim_altered_params/500_epochs/500_epochs_GraphConv.tar")#f'{self.trn_dir}'+""/checkpoint.tar")
             load_checkpoint(checkpoint, self.model, optimizer)
             print("Model's state_dict:")
             for param_tensor in self.model.state_dict():
@@ -942,14 +980,14 @@ class CnnTrainer(Trainer):
                     # correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
                     # total_graphs = total_graphs + len(lbl_cat.flatten())
                     #if j == 1:
-                    if j % 150 == 0:
+                    if j % 5 == 0: # % 150
                         amax = preds.argmax(dim=1)
                         # print("pred val:\t\t", amax) 
                         # print("actual labels:\t\t", lbl_cat.flatten())
                         actual_labels = lbl_cat.flatten()
                         selected_labels_1 = actual_labels == 1
-                        # print(amax[selected_labels])
-                        # print(actual_labels[selected_labels])
+                        # print(amax[selected_labels_1])
+                        # print(actual_labels[selected_labels_1])
                         selected_labels_0 = actual_labels == 0
                         # print("number correct:\t\t", int((amax == lbl_cat.flatten()).sum()), "\twhere actual class = 1:", int((amax[selected_labels_1] == actual_labels[selected_labels_1]).sum()), "\twhere actual class = 0:", int((amax[selected_labels_0] == actual_labels[selected_labels_0]).sum()))
 
@@ -1028,7 +1066,7 @@ class CnnTrainer(Trainer):
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t'
             trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
 
-            print("pre model eval")
+            # print("pre model eval")
 
             self.model.eval()
             with torch.no_grad():
@@ -1036,7 +1074,7 @@ class CnnTrainer(Trainer):
                 for k in range(1):
                     correct = 0
                     total_graphs = 0
-                    print("pre val loader")
+                    # print("pre val loader")
                     #for j, (val_phy_dat, val_graph_dat, val_aux_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
                     for j, (val_graph_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
                                                                     total=val_num_batches,
@@ -1048,10 +1086,10 @@ class CnnTrainer(Trainer):
                         val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
                         val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
                         val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
-                        print("VALIDATION GRAPH DATA")
-                        print(val_idx_dat)
-                        print(val_lbl_num)
-                        print(val_graph_dat)
+                        # print("VALIDATION GRAPH DATA")
+                        # print(val_idx_dat)
+                        # print(val_lbl_num)
+                        # print(val_graph_dat)
                     #val_graph_dat = val_graph_dat.to(self.TORCH_DEVICE)
 
                     # reset gradients for tensors
@@ -1060,7 +1098,7 @@ class CnnTrainer(Trainer):
 
 
                     # # forward pass of validation to estimate labels
-                        print("pre val model")
+                        # print("pre val model")
                         try:
                             val_lbls_hat       = self.model(val_graph_dat)
                         except Exception as e:
@@ -1232,7 +1270,7 @@ class CnnTrainer(Trainer):
 
       
             # early stopping
-            if val_bad_count >= self.num_early_stop and self.num_early_stop > 0:
+            if val_bad_count >= self.num_early_stop and self.num_early_stop > 0 and i < 15:
                 print(f'Early stop: validation loss increased for num_early_stop={self.num_early_stop} consecutive epochs')
                 break
 
@@ -1478,7 +1516,7 @@ class CnnTrainer(Trainer):
         train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
         
         # save model to file
-        torch.save(self.model, model_arch_fn)
+        torch.save(self.model.module, model_arch_fn)
 
         # save json history from running MASTER
         self.train_history.to_csv(model_history_fn, index=False, sep=',',
@@ -1489,7 +1527,7 @@ class CnnTrainer(Trainer):
                                     'mean':self.train_aux_data_mean_sd[0],
                                     'sd':self.train_aux_data_mean_sd[1]})
         df_aux_data.to_csv(train_aux_data_norm_fn, index=False, sep=',',
-                           float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                           float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
         
         # training example index
         df_train_label_idx = pd.DataFrame(self.train_label_index, columns=['idx'])
@@ -1502,14 +1540,14 @@ class CnnTrainer(Trainer):
                                       'mean':self.train_labels_num_mean_sd[0],
                                       'sd':self.train_labels_num_mean_sd[1]})
             df_labels.to_csv(train_labels_num_norm_fn, index=False, sep=',',
-                             float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                             float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
     
             # save CPI intervals
             df_cpi_intervals = pd.DataFrame(self.cpi_adjustments,
                                             columns=self.param_num_names)
             df_cpi_intervals.to_csv(model_cpi_fn,
                                     index=False, sep=',',
-                                    float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                    float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
             
             # downsample all true training labels
             df_train_label_true = pd.DataFrame(self.train_label_num_true,
@@ -1524,7 +1562,7 @@ class CnnTrainer(Trainer):
             
             df_train_label_num_true.to_csv(train_label_num_true_fn,
                                             index=False, sep=',',
-                                            float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                            float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
             
             # save train numerical label estimates
             self.train_label_num_est = util.denormalize(self.train_label_num_est,
@@ -1547,10 +1585,10 @@ class CnnTrainer(Trainer):
             # convert to csv and save
             df_train_label_num_est_nocalib.to_csv(train_label_est_nocalib_fn,
                                                    index=False, sep=',',
-                                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
             df_train_label_num_est_calib.to_csv(train_label_num_est_fn,
                                                  index=False, sep=',',
-                                                 float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                                 float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
     
         if self.has_label_cat:
             # save true values for train categ. labels
@@ -1558,7 +1596,7 @@ class CnnTrainer(Trainer):
                                                    columns=self.param_cat_names )
             df_train_label_cat_true = pd.concat([df_train_label_idx, df_train_label_cat_true], axis=1 )
             df_train_label_cat_true.to_csv(train_label_cat_true_fn,
-                                           index=False, sep=',', mode='a')
+                                           index=False, sep=',', mode='w')
     
             # save train categorical label estimates
             #print(self.train_label_cat_est)
@@ -1567,7 +1605,7 @@ class CnnTrainer(Trainer):
             df_train_label_cat_est = pd.concat([df_train_label_idx, df_train_label_cat_est], axis=1 )
             df_train_label_cat_est.to_csv(train_label_cat_est_fn,
                                           index=False, sep=',',
-                                          float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                          float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
         print("returning from save results")
 
         return

@@ -21,14 +21,82 @@ import pandas as pd
 import h5py
 import torch
 
-from torch_geometric.data import Data as GeoData
+from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch as GeoBatch
 from torch_geometric.loader import DataLoader
+from torch_geometric.nn import DataParallel
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # phyddle imports
 from phyddle import utilities as util
 
 ##################################################
+class Dataset(Geoset):
+    """
+    Dataset class for training. It is used by torch.utils.data.DataLoader to
+    generate training batches for the training loop. Training examples include
+    phylogenetic-state tensors, auxiliary data tensors, and labels.
+    """
+    # Constructor
+    def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
+        self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
+        self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
+        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
+        self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
+        self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
+        self.len         = len(self.labels_num) #self.labels_num.shape[0]
 
+
+
+        edges_data = torch.from_numpy(edges_data.astype('int'))
+        min_index =   edges_data.min()
+        edges_data = torch.sub(edges_data, min_index)
+        unique = torch.unique(edges_data)
+        all = torch.arange(edges_data.max()+1)
+        difference = all[torch.isin(all, unique, invert=True)]
+        reduction = torch.searchsorted(difference, all, right=False)
+        edges_data=  torch.sub(edges_data, reduction[edges_data])
+        #self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
+        self.graph_dat = []
+        self.id_list = graph_ids
+        i = 0
+        num_nodes = num_nodes.astype(int)
+        num_edges = num_edges.astype(int)
+        if num_nodes[0] != num_edges[0] + 1:
+            print("nodes:", num_nodes)
+            print("edges:", num_edges)
+            quit()
+        prev_edge_ind = 0
+        prev_node_ind = 0
+        for i in range(len(graph_ids)):
+            current_edge_ind = prev_edge_ind + num_edges[i].astype(int)[0]
+            current_node_ind = prev_node_ind + num_nodes[i].astype(int)[0]
+
+            selected_nodes = node_data[prev_node_ind:current_node_ind]
+            selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
+
+
+        
+            if (selected_nodes.shape[0] != selected_edges.shape[1] + 1):
+                print("MISMATCH!!!!")
+                quit()
+            self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+            prev_edge_ind = current_edge_ind
+            prev_node_ind = current_node_ind
+        # print("self graph dat")
+        # print(self.graph_dat)
+
+    # Getting the data
+    def __getitem__(self, index):
+        #print("getting graph  index", str(index), ":",self.graph_dat[index] )
+        #return (#self.phy_data[index], self.graph_dat[index], #[index],
+                #self.aux_data[index], self.idx_data[index],
+                #self.labels_num[index], self.labels_cat[index])
+        return(self.graph_dat[index], self.idx_data[index],
+                self.labels_num[index], self.labels_cat[index])
+    
+    # Getting length of the data
+    def __len__(self):
+        return self.len
 
 def load(args):
     """Load an Estimator object.
@@ -48,7 +116,19 @@ def load(args):
     else:
         return NotImplementedError
 
+class GraphOnlyWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, data, *args, **kwargs):
+        # Ignore all non-graph arguments from DataLoader
+        return self.model(data)
+
 ##################################################
+
+
+
 
 
 class Estimator:
@@ -105,6 +185,7 @@ class Estimator:
         self.graph_conv         =bool(args['graph_conv'])
         self.phy_hidden_size = int(args['phy_hidden_size'])
         self.optimizer          = str(args['optimizer'])
+        self.num_classes        =  int(args['num_classes'])
         self.scheduler="NA"
 
         self.learning_rate      = float(args['learning_rate'])
@@ -130,6 +211,9 @@ class Estimator:
         # cat vs. real parameter names
         self.label_num_names = [ k for k,v in self.param_est.items() if v == 'num' ]
         self.label_cat_names = [ k for k,v in self.param_est.items() if v == 'cat' ]
+        self.aux_names = ["num_taxa", "age_var"]
+        self.has_aux = len(self.aux_names) > 0
+
         self.has_label_num = len(self.label_num_names) > 0
         self.has_label_cat = len(self.label_cat_names) > 0
         
@@ -283,7 +367,6 @@ class Estimator:
                 idx = self.label_names.index(k)
                 unique_cats, encoded_cats = np.unique(labels[:,idx],
                                                       return_inverse=True)
-                print(unique_cats)
                 self.param_cat[k] = len(unique_cats)
                 labels[:,idx] = encoded_cats
                 idx_cat.append( idx )
@@ -314,9 +397,7 @@ class Estimator:
         Returns:
             bool: True if empirical analysis is being performed.
         """
-        print("mode a = ", mode)
         assert mode in ['sim', 'emp']
-        print("mode b = ", mode)
 
         # check if empirical directory exists
         if not os.path.exists(self.fmt_dir):
@@ -328,16 +409,15 @@ class Estimator:
             data_src = 'empirical'
         elif mode == 'sim':
             data_src = 'test'
-        print("data_src", data_src)
         # check if empirical directory contains files
         files = ['']
+
+
         if self.tensor_format == 'hdf5':
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ] # {self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}
         elif self.tensor_format == 'csv':
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.phy_data.csv',
              f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.aux_data.csv' ]
-        print("files")
-        print(files)
         # fail if key file missing
         for fn in files:
             if not os.path.exists(fn):
@@ -358,7 +438,7 @@ class Estimator:
             
         """
         # filesystem
-        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
+        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
         train_norm_aux_data_fn = f'{path_prefix}.train_norm.aux_data.csv'
         train_norm_labels_num_fn = f'{path_prefix}.train_norm.labels_num.csv'
         model_cpi_fn = f'{path_prefix}.cpi_adjustments.csv'
@@ -397,10 +477,10 @@ class Estimator:
         
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
             short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
         elif mode == 'emp':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
+            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
             short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
         
         # simulated test datasets for csv or hdf5
@@ -457,50 +537,59 @@ class Estimator:
             aux_data_names = [ s.decode() for s in hdf5_file['aux_data_names'][0,:] ]
             hdf5_file.close()
         
-        edges_matrix = pd.concat((node_1_data, node_2_data), axis=1).to_numpy()
+        edges_matrix = pd.concat((node_1_data, node_2_data), axis=1).to_numpy().T
         node_attributes = nodes_dist.flatten()
 
         labels_num, labels_cat = self.separate_labels(labels)
+        self.num_sample = phy_data.shape[0]
+        phy_data.shape = (self.num_sample, -1, self.num_data_col)
+
+        unique_ids = np.unique(graph_ids)
+
+        self.estimate_dataset = Dataset(phy_data, node_attributes,
+                                             edges_matrix, aux_data,
+                                             idx_data,
+                                             labels_num,
+                                             labels_cat, unique_ids, num_nodes, num_edges)
 
         # self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
-        self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
-        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
-        self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
-        self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
+        # self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
+        # self.idx_data    = torch.from_numpy(idx_data.astype('int'))
+        # self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
+        # self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
 
-        edges_matrix = torch.from_numpy(edges_matrix.astype('int'))
-        min_index =   edges_matrix.min()
-        edges_matrix = torch.sub(edges_matrix, min_index)
-        unique = torch.unique(edges_matrix)
-        all_from_unique = torch.arange(edges_matrix.max()+1)
-        difference = all_from_unique[torch.isin(all_from_unique, unique, invert=True)]
-        reduction = torch.searchsorted(difference, all_from_unique, right=False)
-        edges_matrix =  torch.sub(edges_matrix, reduction[edges_matrix])
+        # edges_matrix = torch.from_numpy(edges_matrix.astype('int'))
+        # min_index =   edges_matrix.min()
+        # edges_matrix = torch.sub(edges_matrix, min_index)
+        # unique = torch.unique(edges_matrix)
+        # all_from_unique = torch.arange(edges_matrix.max()+1)
+        # difference = all_from_unique[torch.isin(all_from_unique, unique, invert=True)]
+        # reduction = torch.searchsorted(difference, all_from_unique, right=False)
+        # edges_matrix =  torch.sub(edges_matrix, reduction[edges_matrix])
 
-        self.graph_data = []
-        graph_ids = np.unique(graph_ids)
-        self.id_list = graph_ids
-        i = 0
-        num_nodes = num_nodes.astype(int)
-        num_edges = num_edges.astype(int)
-        prev_edge_ind = 0
-        prev_node_ind = 0
+        # self.graph_data = []
+        # graph_ids = np.unique(graph_ids)
+        # self.id_list = graph_ids
+        # i = 0
+        # num_nodes = num_nodes.astype(int)
+        # num_edges = num_edges.astype(int)
+        # prev_edge_ind = 0
+        # prev_node_ind = 0
 
-        for i in range(len(graph_ids)):
+        # for i in range(len(graph_ids)):
 
-            current_edge_ind = prev_edge_ind + int(num_edges[i])
-            current_node_ind = prev_node_ind + int(num_nodes[i])
-            selected_nodes = node_attributes[prev_node_ind:current_node_ind]
-            selected_edges = edges_matrix[:, prev_edge_ind:current_edge_ind]
+        #     current_edge_ind = prev_edge_ind + int(num_edges[i])
+        #     current_node_ind = prev_node_ind + int(num_nodes[i])
+        #     selected_nodes = node_attributes[prev_node_ind:current_node_ind]
+        #     selected_edges = edges_matrix[:, prev_edge_ind:current_edge_ind]
         
-            #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
-            self.graph_data.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges))# y=labels_cat[i])#, phy_data=self.phy_data, aux_data=self.aux_data))
-            prev_edge_ind = current_edge_ind
-            prev_node_ind = current_node_ind
+        #     #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+        #     self.graph_data.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges))# y=labels_cat[i])#, phy_data=self.phy_data, aux_data=self.aux_data))
+        #     prev_edge_ind = current_edge_ind
+        #     prev_node_ind = current_node_ind
 
         
         # get number of samples
-        self.num_sample = len(graph_ids)
 
         # reshape phylogenetic state tensor
         # phy_data.shape = (num_sample, -1, self.num_data_col)
@@ -510,7 +599,7 @@ class Estimator:
         # test dataset normalization
         assert aux_data.shape[0] == self.num_sample
         self.aux_data = util.normalize(aux_data, self.train_aux_data_mean_sd)
-        self.aux_data_names = aux_data_names
+        #self.aux_data_names = aux_data_names
         
         # dataset index
         self.idx_data = idx_data
@@ -520,6 +609,7 @@ class Estimator:
             # real vs. cat labels
             label_num_idx = list()
             label_cat_idx = list()
+            aux_idx = list()
             for i,p in enumerate(label_names):
                 if p in self.label_num_names:
                     label_num_idx.append(i)
@@ -527,8 +617,19 @@ class Estimator:
                     label_cat_idx.append(i)
             
             assert labels.shape[0] == self.num_sample
+            
+            for i,p in enumerate(aux_data_names):
+                if p in self.aux_names:
+                    aux_idx.append(i)
+            self.aux_names = []
+            for i in aux_idx:
+                self.aux_names.append(aux_data_names[i])
+
+
             self.true_labels_num = labels[:,label_num_idx]
             self.true_labels_cat = labels[:,label_cat_idx]
+
+            self.true_aux = self.aux_data[:,aux_idx]
             
             # recode categorical labels
             for idx in range(self.true_labels_cat.shape[1]):
@@ -557,33 +658,42 @@ class Estimator:
         # filesystem
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
         if mode == 'emp':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
-            
-        model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        out_est_labels_num_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
-        out_true_labels_num_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
-        out_est_labels_cat_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
-        out_true_labels_cat_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
+
+        model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        out_est_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
+        out_true_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
+        out_est_labels_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
+        out_true_labels_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
+        out_true_aux_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.aux.csv'
+        out_aux_names_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.aux_names.csv'
+
+
     
         # load model
         self.mymodel = torch.load(model_arch_fn, map_location=self.TORCH_DEVICE, weights_only=False)
+        # if self.use_cuda:
+        #    self.mymodel = DataParallel((self.mymodel)) # model_arch_fn
         self.mymodel.to(self.TORCH_DEVICE)
 
         # get estimates
-        loader = DataLoader(self.graph_data, batch_size = self.num_sample)
-        for batch in loader:
-            label_est = self.mymodel(torch.Tensor(batch).to(self.TORCH_DEVICE))
+        loader = DataLoader(self.estimate_dataset, batch_size = self.num_sample)
+        for loaded_graph, loaded_idx, loaded_lbl_num, loaded_lbl_cat in loader:
+            loaded_graph = loaded_graph.to(self.TORCH_DEVICE)
+            # loaded_batch = loaded_batch.to("cuda")
+            label_est = self.mymodel(loaded_graph)#.to(torch.device("cuda"))
         
         # real vs. cat estimates
         labels_est_num = label_est[0:3]
         labels_est_cat = label_est[3]
+        amax = labels_est_cat.argmax(dim=1)
 
-        # force categorical dimensionality (had problems for categ)
-        for k,v in labels_est_cat.items():
-            labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
-                                              shape=(self.graph_data.shape[0],-1))
+        # # force categorical dimensionality (had problems for categ)
+        # for k,v in labels_est_cat.items():
+        #     labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
+        #                                       shape=(self.graph_data.shape[0],-1))
 
         # point estimates & CPIs for test labels
         if self.has_label_num:
@@ -607,16 +717,19 @@ class Estimator:
             df_est_labels_num = pd.concat( [self.idx_data, df_est_labels_num], axis=1 )
             df_est_labels_num.to_csv(out_est_labels_num_fn, index=False, sep=',',
                                       float_format=util.PANDAS_FLOAT_FMT_STR)
+
+        self.idx_data = pd.DataFrame(self.idx_data)                              
         
         # save label cat estimates
         if self.has_label_cat:
-            df_est_labels_cat = self.format_label_cat(labels_est_cat)
+            df_est_labels_cat = pd.DataFrame((labels_est_cat.cpu().detach().argmax(dim=1).flatten()))
+            #self.format_label_cat(labels_est_cat)
             df_est_labels_cat = pd.concat( [self.idx_data, df_est_labels_cat], axis=1 )
             df_est_labels_cat.to_csv(out_est_labels_cat_fn, index=False, sep=',',
                                      float_format=util.PANDAS_FLOAT_FMT_STR)
             
-            for k,v in labels_est_cat.items():
-                labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()
+            # for k,v in labels_est_cat.items():
+            #     labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()
         
         if mode == 'sim':
             if self.has_label_num:
@@ -628,10 +741,16 @@ class Estimator:
                 df_true_labels_cat = pd.DataFrame(self.true_labels_cat, columns=self.label_cat_names, dtype='int')
                 df_true_labels_cat = pd.concat( [self.idx_data, df_true_labels_cat], axis=1)
                 df_true_labels_cat.to_csv(out_true_labels_cat_fn, index=False, sep=',')
+            if self.has_aux:
+                df_true_aux = pd.DataFrame(self.true_aux, dtype='float')
+                df_true_aux = pd.concat( [self.idx_data, df_true_aux], axis=1)
+                
+                df_true_aux.columns = ["idx"] + self.aux_names
+                df_true_aux.to_csv(out_true_aux_fn, index=False, sep=',')
         
         if mode == 'emp':
             # self.est_labels_num_raw = denorm_est_labels_num
-            self.est_aux_data_raw = util.denormalize(self.aux_data,
+            self.est_true_aux_raw = util.denormalize(self.aux_data,
                                                      self.train_aux_data_mean_sd,
                                                      exp=False)
             if self.has_label_num:

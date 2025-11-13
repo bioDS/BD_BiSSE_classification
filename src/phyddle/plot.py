@@ -31,9 +31,11 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import LocalOutlierFactor
-
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 # phyddle imports
 from phyddle import utilities as util
+import math
 
 
 ##################################################
@@ -117,8 +119,9 @@ class Plotter:
         self.plot_min_emp = int(args['plot_min_emp'])
         self.plot_num_emp = int(args['plot_num_emp'])
         self.plot_pca_noise = float(args['plot_pca_noise'])
+        self.num_classes = int(args['num_classes'])
 
-        self.scheduler="CosineAnnealingLR"
+        self.scheduler="NA"#CosineAnnealingLR
 
 
         # phy data dimension
@@ -131,15 +134,16 @@ class Plotter:
         # prefixes
         fmt_proj_prefix = f'{self.fmt_dir}/{self.fmt_prefix}'
         trn_proj_prefix = f'{self.trn_dir}/{self.trn_prefix}'
-        est_proj_prefix = f'{self.est_dir}/{self.est_prefix}'
+        est_proj_prefix = f'{self.est_dir}' # /{self.est_prefix}
+        if self.est_prefix == "":
+            est_proj_prefix = f'{self.est_dir}'
         plt_proj_prefix = f'{self.plt_dir}/{self.plt_prefix}'
 
         # train dataset, main dataset
-        self.train_hdf5_fn = f'{fmt_proj_prefix}.train.hdf5'
+        self.train_hdf5_fn = f'{fmt_proj_prefix}.{self.est_dir}.train.hdf5'
         self.train_phy_data_fn = f'{fmt_proj_prefix}.train.phy_data.csv'
         self.train_aux_data_fn = f'{fmt_proj_prefix}.train.aux_data.csv'
 
-        print(self.train_aux_data_fn)
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
@@ -149,11 +153,19 @@ class Plotter:
         self.train_true_cat_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
 
         # test dataset tensors
-        self.test_est_num_fn = f'{est_proj_prefix}.test_est.labels_num.csv'
-        self.test_true_num_fn = f'{est_proj_prefix}.test_true.labels_num.csv'
-        self.test_est_cat_fn = f'{est_proj_prefix}.test_est.labels_cat.csv'
-        self.test_true_cat_fn = f'{est_proj_prefix}.test_true.labels_cat.csv'
+        if self.est_prefix == "":
+            path_prefix = f'{est_proj_prefix}/{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+        else:
+            path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
 
+        self.test_est_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
+        self.test_true_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
+
+        self.test_est_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
+        self.test_true_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
+        self.test_aux_fn =  f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.aux.csv'
+
+        print("test_est_cat_fn", self.test_est_cat_fn)
         # empirical dataset tensors
         self.emp_hdf5_fn = f'{fmt_proj_prefix}.empirical.hdf5'
         self.emp_aux_data_fn = f'{fmt_proj_prefix}.empirical.aux_data.csv'
@@ -162,7 +174,7 @@ class Plotter:
         self.emp_est_cat_fn = f'{est_proj_prefix}.empirical_est.labels_cat.csv'
 
         # network
-        self.model_arch_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
+        self.model_arch_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
         self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
 
         # new empirical plot
@@ -235,6 +247,8 @@ class Plotter:
         self.num_empirical = int(0)  # init with load_input()
         self.sim_test_valid = False
         self.sim_train_valid = False
+
+        self.num_nodes = None
         
         return
 
@@ -325,6 +339,7 @@ class Plotter:
                                      hdf5_file['label_names'][0, :]]
                 train_labels = pd.DataFrame(hdf5_file['labels'][:, :],
                                             columns=train_label_names)
+                self.num_nodes =  pd.DataFrame(hdf5_file['num_nodes'][:, :])
                 hdf5_file.close()
                 self.has_train_fmt = True
             except FileNotFoundError:
@@ -358,10 +373,19 @@ class Plotter:
         self.test_true_num = util.read_csv_as_pandas(self.test_true_num_fn)
         self.test_est_cat = util.read_csv_as_pandas(self.test_est_cat_fn)
         self.test_true_cat = util.read_csv_as_pandas(self.test_true_cat_fn)
+        self.test_true_aux = util.read_csv_as_pandas(self.test_aux_fn)
 
         # empirical estimated labels
+
+
         self.emp_est_num = util.read_csv_as_pandas(self.emp_est_num_fn)
         self.emp_est_cat = util.read_csv_as_pandas(self.emp_est_cat_fn)
+
+
+
+        self.test_true_cat.columns = ['idx', 'model_type']
+        self.test_est_cat.columns = ['idx', 'model_type']
+
 
         # check what datasets we have
         if self.test_est_num is not None and self.test_true_num is not None:
@@ -372,6 +396,11 @@ class Plotter:
             self.has_test_cat = True
             self.test_est_cat = self.test_est_cat.drop(columns=['idx'])
             self.test_true_cat = self.test_true_cat.drop(columns=['idx'])
+        if self.test_true_aux is not None:
+            self.has_true_aux = True
+            self.test_true_aux = self.test_true_aux.drop(self.test_true_aux.columns[0], axis=1)
+
+
         if self.train_est_num is not None and self.train_true_num is not None:
             self.has_train_num = True
             self.train_est_num = self.train_est_num.drop(columns=['idx'])
@@ -386,6 +415,7 @@ class Plotter:
         if self.emp_est_cat is not None:
             self.has_emp_cat = True
             self.emp_est_cat = self.emp_est_cat.drop(columns=['idx'])
+
 
         if self.has_train_fmt:
             # split training labels from format into real/cat
@@ -549,6 +579,8 @@ class Plotter:
         """Calls plot_confusion_matrix with arguments."""
         assert dataset_name in ['train', 'test']
 
+        print("calling make plot confusion matrix for dataset", dataset_name)
+
         if dataset_name == 'train':
             self.plot_confusion_matrix(ests=self.train_est_cat.copy(),
                                        labels=self.train_true_cat.copy(),
@@ -560,11 +592,12 @@ class Plotter:
                                        labels=self.test_true_cat.copy(),
                                        prefix=self.save_test_est_fn,
                                        color=self.plot_test_color,
-                                       title='Test')
+                                       title='Test',
+                                       aux = self.test_true_aux)
         # done
         return
 
-    def plot_confusion_matrix(self, ests, labels, prefix, color, title):
+    def plot_confusion_matrix(self, ests, labels, prefix, color, title, aux=None):
         """Plots confusion matrix.
 
         This function plots the confusion matrix for categorical labels.
@@ -578,8 +611,119 @@ class Plotter:
 
         """
 
+
+
         # loop over cat. parameters
         for p in self.param_name_cat:
+
+            cat_one_var_conf = confusion_matrix(labels, ests)
+        
+            fig, ax = plt.subplots(figsize=(6, 6))
+            fig.tight_layout()
+            cm = LinearSegmentedColormap.from_list(
+                "Custom", ['white', color], N=20)
+            cax = ax.matshow(cat_one_var_conf, cmap=cm, vmin=0.0, vmax=np.max(cat_one_var_conf))
+            for (i, j), z in np.ndenumerate(cat_one_var_conf):
+                text_color = 'black'
+                if z > np.max(cat_one_var_conf)/2:
+                    text_color = 'white'
+                ax.text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
+                        color=text_color)
+            ax.xaxis.set_ticks_position('bottom')
+            cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
+            # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
+            # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
+            # plt.xlabel(f'{p} truth')
+            # plt.xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "sky BD", "sky BiSSE"])
+            # plt.yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "sky BD", "sky BiSSE"])
+
+            # plt.ylabel(f'{p} estimate')
+            plt.title(f'{title} estimates: {p}')
+            if self.num_classes == 4:
+                plt.yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+            if self.num_classes == 2:
+                plt.yticks(ticks=[0,1,], labels=["BD", "BiSSE"], fontsize=5)
+            plt.xlabel(f'{p} estimate')
+            if self.num_classes == 4:
+                plt.xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+            if self.num_classes == 2:
+                plt.xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+
+            plt.ylabel(f'{p} truth')
+            plt.savefig(fname=f'{prefix}_{p}_per_cat.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+            plt.clf()
+            plt.close()
+
+            
+            #for b in range(len(bins)):
+            
+
+            for col in range(aux.shape[1]):
+                bins=np.linspace(np.min(aux.iloc[:,col]), np.max(aux.iloc[:,col]), 11)
+                binned_aux = np.empty(aux.shape[0]).astype(int)
+                for index, row in aux.iterrows():
+                    b = 1
+                    while bins[b] < row.iloc[col]:
+                        b = b + 1
+                    binned_aux[index] = b
+                binned_aux = binned_aux.astype(int)
+
+                fig, ax = plt.subplots(3,math.ceil(len(np.unique(binned_aux))/3),figsize=(7, 7))
+                ax =ax.flatten()
+                binned_matrices = []
+                for b in range(np.min(binned_aux), np.max(binned_aux)+1):
+                    sel_labels = labels[binned_aux == b]
+                    sel_ests = ests[binned_aux == b]
+                    binned_matrices.append(confusion_matrix(sel_labels, sel_ests))
+                
+                plt.rcParams.update({'font.size': 5})
+                for b, matrix in enumerate(binned_matrices):
+                    cm = LinearSegmentedColormap.from_list(
+                    "Custom", ['white', color], N=20)
+                    cax = ax[b].matshow(matrix, cmap=cm, vmin=0.0, vmax=np.max(matrix))
+                    for (i, j), z in np.ndenumerate(matrix):
+                        text_color = 'black'
+                        if z > np.max(matrix)/2:
+                            text_color = 'white'
+                        ax[b].text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
+                                color=text_color)
+                    ax[b].xaxis.set_ticks_position('bottom')
+                    cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
+                    # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
+                    # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
+
+                    if self.num_classes == 4:
+                        ax[b].set_xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                    if self.num_classes == 2:
+                        ax[b].set_xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                    if b % 4 == 0:
+                        ax[b].set_xlabel(f'{p} estimate')
+                    else:
+                        ax[b].set_xticks([])
+                        ax[b].set_xlabel("")
+                    if self.num_classes == 4:
+                        ax[b].set_yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                    if self.num_classes == 2:
+                         ax[b].set_yticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                    if b == 0:
+                        ax[b].set_ylabel(f'{p} truth')
+                    else:
+                         ax[b].set_ylabel("")
+
+
+                    ax[b].set_title(f'quantile {b/10}')
+                for plot_ind in range(len(binned_matrices), len(ax)):
+                    ax[plot_ind].axis('off')
+                plt.suptitle(aux.columns[col], fontsize=15)
+                plt.savefig(fname=f'{prefix}_{p}_per_cat_binned_{aux.columns[col]}.pdf', format='pdf', dpi=300,
+                                bbox_inches='tight')
+                plt.clf()
+                plt.close()
+                plt.rcParams.update({'font.size': 12})
+                
+                        
+
             # get true/est values
             est_cats_p = [x for x in ests.columns if p in x]
             lbls_p = labels[p].copy()
@@ -622,8 +766,8 @@ class Plotter:
             cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
             # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
             # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
-            plt.xlabel(f'{p} truth')
-            plt.ylabel(f'{p} estimate')
+            plt.ylabel(f'{p} truth')
+            plt.xlabel(f'{p} estimate')
             plt.title(f'{title} estimates: {p}')
             plt.savefig(fname=f'{prefix}_{p}.pdf', format='pdf', dpi=300,
                         bbox_inches='tight')
