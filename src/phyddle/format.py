@@ -51,6 +51,8 @@ scales = importr('scales')
 rlist = importr('rlist')
 phytools = importr('phytools')
 gen_graph = r['generate_phylogeny_graph']
+r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
+get_mle = r['get_mle_label']
 offset = -1
 graph_id = 0
 
@@ -961,6 +963,8 @@ class Formatter:
         if save_phyenc_csv_ and cpvs_data is not None:
             cpsv_str = util.ndarray_to_flat_str(cpvs_data.flatten()) + '\n'
             util.write_to_file(cpsv_str, cpsv_fn)
+            print("check")
+            util.decode_cdvs_string(cpsv_str)
 
         # read in labels file
         labels = None
@@ -1430,6 +1434,8 @@ class Formatter:
             aux_data = aux_data[1:,:].astype('float64')
             aux_data_names = aux_data[0,:]
         elif self.tensor_format == 'hdf5':
+
+
             hdf5_file = h5py.File(hdf5_fn, 'r')
             phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
             aux_data = pd.DataFrame(hdf5_file['aux_data']).to_numpy()

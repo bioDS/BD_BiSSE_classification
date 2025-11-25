@@ -288,11 +288,8 @@ class Dataset(Geoset):
         # print(edges_data)
         # print(edges_data.shape)
         for i in range(len(graph_ids)):
-            # print("graph =", graph_ids[i], "nodes: ", num_nodes[i], "edges:", num_edges[i])
-            # print("previous node index:", prev_node_ind)
             current_edge_ind = prev_edge_ind + num_edges[i].astype(np.int64)[0]
             current_node_ind = prev_node_ind + num_nodes[i].astype(np.int64)[0]
-            # print("num nodes:", int(num_nodes[i]))
 
             selected_nodes = node_data[prev_node_ind:current_node_ind]
             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]

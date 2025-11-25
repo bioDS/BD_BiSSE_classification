@@ -121,7 +121,7 @@ def settings_registry():
 
         # directories
         'dir':         {'step': 'SFTEP',  'type': str,  'section': 'Workspace',  'default': './',   'help': 'Parent directory for all step directories unless step directory given'},
-        'sim_dir':     {'step': 'SF',     'type': str,  'section': 'Workspace',  'default': None,   'help': 'Directory for raw simulated data'},
+        'sim_dir':     {'step': 'SEF',     'type': str,  'section': 'Workspace',  'default': None,   'help': 'Directory for raw simulated data'},
         'emp_dir':     {'step': 'SF',     'type': str,  'section': 'Workspace',  'default': None,   'help': 'Directory for raw empirical data'},
         'fmt_dir':     {'step': 'FTEP',   'type': str,  'section': 'Workspace',  'default': None,   'help': 'Directory for tensor-formatted data'},
         'trn_dir':     {'step': 'FTEP',   'type': str,  'section': 'Workspace',  'default': None,   'help': 'Directory for trained networks and training output'},
@@ -208,6 +208,11 @@ def settings_registry():
         'warn_aux_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.0001,      'help': 'Percentile to detect extreme empirical auxiliary (abs.) values.'},
         'warn_lbl_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.01,        'help': 'Percentile to detect extreme empirical label (abs.) values.'},
         'num_classes':           {'step': 'EP',     'type': int,    'section': 'Estimate', 'default':4, 'help': 'Number of categorical classes used for training'},
+
+        'calc_MLE':           {'step': 'EP',     'type': bool,    'section': 'Estimate', 'default':False, 'help': 'Whether to use MLE to compare likelihood of model types'},
+        'load_MLE':           {'step': 'EP',     'type': bool,    'section': 'Estimate', 'default':False, 'help': 'Whether to load MLE to compare likelihood of model types'},
+
+
 
         # plotting options
         'plot_train_color'  : {'step': 'P', 'type': str,    'section': 'Plot', 'default': 'blue',       'help': 'Plotting color for training data elements'},
@@ -1712,8 +1717,20 @@ def encode_cdvs(phy, dat, tree_width, tree_encode_type, rescale=True):
     if rescale:
         heights = heights / np.max(heights)
     phylo_tensor = np.hstack( [heights, states] )
-
+    phy.write(file=sys.stdout, schema='newick')
+    # print("heights:", heights.shape, heights)
+    # print("states:", states.shape, states,)
+    # print("phylo_tensor:", phylo_tensor.shape, phylo_tensor)
     return phylo_tensor
+
+def decode_cdvs_string(phylo_string):
+    vals = phylo_string.split(",")
+    states = vals[3::4]
+    heights = [x for i, x in enumerate(vals) if (i + 1) % 4 != 0]
+    # print("len", len(heights), "heights?", heights[0:10])
+    # print("len", len(states), "states?",  states[0:10])
+
+
 
 
 def encode_cblvs(phy, dat, tree_width, tree_encode_type, rescale=True):

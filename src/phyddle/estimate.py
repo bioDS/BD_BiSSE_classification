@@ -10,9 +10,16 @@ Authors:   Michael Landis and Ammon Thompson
 Copyright: (c) 2022-2025, Michael Landis and Ammon Thompson
 License:   MIT
 """
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from tqdm.contrib.concurrent import thread_map
+from tqdm import tqdm
 
 # standard imports
 import os
+import sys
+sys.stdout.reconfigure(line_buffering=True)
 
 # external imports
 import numpy as np
@@ -20,11 +27,23 @@ import scipy as sp
 import pandas as pd
 import h5py
 import torch
+import subprocess, pickle
 
 from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch as GeoBatch
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+
+import rpy2
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr, data
+r = robjects.r
+r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
+get_mle = r['get_mle_label']
+
+
+
 
 # phyddle imports
 from phyddle import utilities as util
@@ -116,14 +135,14 @@ def load(args):
     else:
         return NotImplementedError
 
-class GraphOnlyWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
+# class GraphOnlyWrapper(torch.nn.Module):
+#     def __init__(self, model):
+#         super().__init__()
+#         self.model = model
 
-    def forward(self, data, *args, **kwargs):
-        # Ignore all non-graph arguments from DataLoader
-        return self.model(data)
+#     def forward(self, data, *args, **kwargs):
+#         # Ignore all non-graph arguments from DataLoader
+#         return self.model(data)
 
 ##################################################
 
@@ -159,7 +178,11 @@ class Estimator:
         self.trn_dir            = str(args['trn_dir'])
         self.fmt_dir            = str(args['fmt_dir'])
         self.est_dir            = str(args['est_dir'])
+        self.sim_dir            = str(args['sim_dir'])
         self.log_dir            = str(args['log_dir'])
+
+        self.calc_MLE           =bool(args['calc_MLE'])
+        self.load_MLE           =bool(args['load_MLE'])
         
         # dimensions
         self.tree_encode        = str(args['tree_encode'])
@@ -214,6 +237,8 @@ class Estimator:
         self.aux_names = ["num_taxa", "age_var"]
         self.has_aux = len(self.aux_names) > 0
 
+        self.mle_labels = None
+
         self.has_label_num = len(self.label_num_names) > 0
         self.has_label_cat = len(self.label_cat_names) > 0
         
@@ -238,6 +263,61 @@ class Estimator:
         
         # done
         return
+
+    def tree_generator(self, file_names):
+        for f in file_names:
+            with open(f, "r") as open_f:
+                yield open_f.read()
+
+    def MLE(self, idx):
+        # print("idx data:")
+        # print(idx.iloc[:, 0])
+        # [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
+        file_names = [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
+        phylogenies = []
+        for f in file_names:
+            with open(f, "r") as open_file:
+                phylogenies.append(open_file.read())
+        # phylogenies = [open(f, "r").read() for f in file_names]
+
+        # batch_size = 1
+        # batches = [phylogenies[i:i+batch_size] for i in range(0, len(phylogenies), batch_size)]
+        # results = thread_map(self.batch_mle, batches, max_workers=70, desc="Calculating MLE")
+        mle_labels = []
+        with ThreadPoolExecutor(max_workers=80) as executor:
+            futures = {executor.submit(self.single_mle, phy): i for i, phy in enumerate(phylogenies)}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Calculating MLE", ncols=100):
+                mle_labels.append(future.result())
+        cat("mle labels:")
+        print(mle_labels)        
+        return mle_labels
+
+    def batch_mle(self, batch):
+        results = [self.single_mle(phy) for phy in batch]
+        return results
+
+    def single_mle(self, phy):
+        # print("opening single_mle")
+        p = subprocess.Popen(
+        ["python", "parallel_mle.py"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+        )
+        try:
+            pickle.dump(phy, p.stdin)
+            p.stdin.close()
+            mle_label = pickle.load(p.stdout)
+        except Exception:
+            p.kill()
+            p.wait()
+            raise
+        finally:
+            p.stdout.close()
+            p.stderr.close()
+            p.wait()
+        # print(mle_label)
+        return mle_label
     
     def run(self):
         """Executes all estimation tasks.
@@ -340,6 +420,13 @@ class Estimator:
 
         # done
         util.print_str('... done!', verbose)
+
+        if self.calc_MLE:
+            self.mle_labels = self.MLE(self.idx_data)
+            self.mle_labels.to_csv(out_est_labels_num_fn, index=False, sep=',',
+                                      float_format=util.PANDAS_FLOAT_FMT_STR)
+        elif self.load_MLE:
+            self.mle_labels = pd.read_csv(out_est_labels_num_fn, sep=',', index_col=False)
         return
 
 
@@ -554,7 +641,7 @@ class Estimator:
 
         # self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
         # self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
-        # self.idx_data    = torch.from_numpy(idx_data.astype('int'))
+        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
         # self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
         # self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
 
@@ -669,6 +756,7 @@ class Estimator:
         out_true_labels_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
         out_true_aux_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.aux.csv'
         out_aux_names_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.aux_names.csv'
+        out_est_mle_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_MLE_est.labels_num.csv'
 
 
     
@@ -685,6 +773,8 @@ class Estimator:
             # loaded_batch = loaded_batch.to("cuda")
             label_est = self.mymodel(loaded_graph)#.to(torch.device("cuda"))
         
+        print("LOADED GRAPH")
+        print(loaded_graph)
         # real vs. cat estimates
         labels_est_num = label_est[0:3]
         labels_est_cat = label_est[3]
@@ -715,7 +805,7 @@ class Estimator:
             df_est_labels_num = util.make_param_VLU_mtx(denorm_est_labels_num,
                                                          self.label_num_names)
             df_est_labels_num = pd.concat( [self.idx_data, df_est_labels_num], axis=1 )
-            df_est_labels_num.to_csv(out_est_labels_num_fn, index=False, sep=',',
+            df_est_labels_num.to_csv(out_est_mle_labels_num_fn, index=False, sep=',',
                                       float_format=util.PANDAS_FLOAT_FMT_STR)
 
         self.idx_data = pd.DataFrame(self.idx_data)                              

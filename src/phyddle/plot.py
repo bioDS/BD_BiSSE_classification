@@ -615,6 +615,9 @@ class Plotter:
 
         # loop over cat. parameters
         for p in self.param_name_cat:
+            print("p = ", p)
+            print("labels:", labels)
+            print("ests:", ests)
 
             cat_one_var_conf = confusion_matrix(labels, ests)
         

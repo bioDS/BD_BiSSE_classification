@@ -1364,6 +1364,7 @@ class CnnTrainer(Trainer):
         
         # get uncalibrated estimates
         # training label estimates
+        print("dataset length", len(self.train_dataset))
         train_loader = DataLoader(dataset=self.train_dataset,
                                                    batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_train_examples)
 
@@ -1374,26 +1375,27 @@ class CnnTrainer(Trainer):
 
         #train_batch = next(iter(train_loader))
         # for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
-
         for j, (train_graph_dat, train_idx_dat, train_labels_num, train_labels_cat) in enumerate(train_loader):
+            # print("j = ", j)
 
-        #train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
-        #train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
+            
+            #train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
+            #train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
             train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
             train_labels_cat = train_labels_cat.to(self.TORCH_DEVICE)
-        #train_graph_dat = train_graph_dat.to(self.TORCH_DEVICE)
+            #train_graph_dat = train_graph_dat.to(self.TORCH_DEVICE)
 
-        #train_nodes_dat = [z.to(self.TORCH_DEVICE) for z in train_nodes_dat]
-        #train_edges_dat = [[[z.to(self.TORCH_DEVICE) for z in y] for y in x] for x in train_edges_dat]
-        # NOTE: train_idx[0:1000] will be equal to self.train_label_index[0:1000,:]
-        #       because DataLoader batches are indexed in same order
-        
-        # get train estimates
+            #train_nodes_dat = [z.to(self.TORCH_DEVICE) for z in train_nodes_dat]
+            #train_edges_dat = [[[z.to(self.TORCH_DEVICE) for z in y] for y in x] for x in train_edges_dat]
+            # NOTE: train_idx[0:1000] will be equal to self.train_label_index[0:1000,:]
+            #       because DataLoader batches are indexed in same order
+            
+            # get train estimates
             label_est = self.model(train_graph_dat)
-        #label_est = self.model(train_phy_dat, train_graph_dat, train_aux_dat)
+            #label_est = self.model(train_phy_dat, train_graph_dat, train_aux_dat)
 
         
-        # numerical vs. cat estimates
+            # numerical vs. cat estimates
             labels_num_est = label_est[0:3]
             labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
             labels_cat_est = label_est[3]
@@ -1402,72 +1404,60 @@ class CnnTrainer(Trainer):
 
             if self.has_label_num:
                 train_labels_num = train_labels_num.cpu().detach().numpy()
-                if self.train_label_num_true == None:
-                    train_label_num_true = train_labels_num
+                if j == 0:
+                    self.train_label_num_true = train_labels_num.copy()
                 else:
                     self.train_label_num_true = np.append(self.train_label_num_true, train_labels_num)
                 
                 # uncalibrated training estimates of numerical labels
-                self.train_label_num_est = labels_num_est.copy()
-                if self.train_label_num_est == None:
-                    train_label_num_est = labels_num_est.copy()
+                # self.train_label_num_est = labels_num_est.copy()
+                if j == 0:
+                    self.train_label_num_est = labels_num_est
                 else:
-                    self.train_label_num_est = np.append(self.train_label_num_est, labels_num_est.copy())
+                    self.train_label_num_est = np.append(self.train_label_num_est, labels_num_est)
                 # self.train_label_num_est = util.denormalize(labels_num_est.copy(),
                 #                                             self.train_labels_num_mean_sd)
                 
-                # self.train_label_num_est = util.denormalize(self.train_label_num_est.copy(),
-                
-                # # TODO: something is wrong with de/normalizing labels??
-                # print(labels_num_est.shape)
-                # pn = labels_num_est[0,:,0]
-                # pu = self.train_label_num_est[0,:,0]
-                # mm = self.train_labels_num_mean_sd[0][0]
-                # ss = self.train_labels_num_mean_sd[1][0]
-                # print('pn=',pn)
-                # print('pu=',pu)
-                # print('mean=',mm)
-                # print('sd=',ss)
-                # print( pu * ss + mm )
-                #print(self.train_label_num_est)
 
                 # generate calibration factors
-                self.perform_cpi_calibration()
 
-                # calibrate original estimates
-                labels_num_est_calib = labels_num_est.copy()
-                labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
-                labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
-                
-                # denormalize calibrated estimates
-                if self.train_label_num_est_calib == None:
-                    train_label_num_est_calib = labels_num_est_calib
-                else:
-                    self.train_label_num_est_calib = np.append(self.train_label_num_true, labels_num_est_calib)
-                # self.train_label_num_est_calib = labels_num_est_calib
-
-            # reformat categorical estimates, if they exist
             if self.has_label_cat:
-                if self.train_label_cat_true == None:
-                    self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
+                train_label_cat = train_labels_cat.cpu().detach().numpy().astype('int')
+                if j == 0:
+                    # print("j =", j, "cat true is none")
+                    self.train_label_cat_true = train_label_cat.copy()
                 else:
-                    self.train_label_cat_true = np.append(self.train_label_num_true, train_labels_cat.cpu().detach().numpy().astype('int'))
-                #self.train_label_cat_true = train_labels_cat.cpu().detach().numpy().astype('int')
-
-                if self.train_label_cat_est == None:
-                    self.train_label_cat_est = pd.DataFrame((labels_cat_est.cpu().detach().argmax(dim=1).flatten())) #self.format_label_cat(labels_cat_est)
+                    self.train_label_cat_true = np.append(self.train_label_cat_true, train_label_cat)
+                # print("UPDATE:")
+                # print(self.train_label_cat_true )
+                if j == 0:
+                    self.train_label_cat_est = labels_cat_est.argmax(dim=1).cpu().detach().numpy()
                 else:
-                    self.train_label_cat_est.append(pd.DataFrame((labels_cat_est.cpu().detach().argmax(dim=1).flatten()))) #self.format_label_cat(labels_cat_est)
-                print("train_label_cat_true")
-                print(self.train_label_cat_true )
-                print("train_label_cat_est")
-                print(self.train_label_cat_est)
-                print("accuracy:")
-                print(((self.train_label_cat_true == self.train_label_cat_est).sum())/len(self.train_label_cat_true))
+                    self.train_label_cat_est = np.append(self.train_label_cat_est, labels_cat_est.argmax(dim=1).cpu().detach().numpy())
+                total_correct = (self.train_label_cat_true == self.train_label_cat_est).sum()
+                # print("accuracy:")
+                # print(total_correct/len(self.train_label_cat_true))
             else:
                 print("no label cat")
-            print("returning from make results")
-            return
+        self.perform_cpi_calibration()
+
+            # calibrate original estimates
+        if self.has_label_num:    
+            labels_num_est_calib = self.train_label_num_est.copy()
+            labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
+            labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
+            
+        # # denormalize calibrated estimates
+        # if self.train_label_num_est_calib == None:
+            self.train_label_num_est_calib = labels_num_est_calib
+        # else:
+        #     self.train_label_num_est_calib = np.append(self.train_label_num_true, labels_num_est_calib)
+        # self.train_label_num_est_calib = labels_num_est_calib
+
+        # reformat categorical estimates, if they exist
+        
+        print("returning from make results")
+        return
 
     def format_label_cat(self, x):
         """Formats categorical labels.
@@ -1478,7 +1468,7 @@ class CnnTrainer(Trainer):
         
         df_list = list()
         for k,v in x.items():
-            print("applying softmax")
+            # print("applying softmax")
             v = torch.softmax(v, dim=1).cpu().detach().numpy()
             col_names = [ f'{k}_{i}' for i in range(v.shape[1]) ]
             df = pd.DataFrame(v, columns=col_names)
@@ -1517,22 +1507,24 @@ class CnnTrainer(Trainer):
         
         # save model to file
         torch.save(self.model.module, model_arch_fn)
+        write_mode = 'w'
+
 
         # save json history from running MASTER
         self.train_history.to_csv(model_history_fn, index=False, sep=',',
-                                  float_format=util.PANDAS_FLOAT_FMT_STR, mode='a')
+                                  float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
 
         # save aux_data names, means, sd for new test dataset normalization
         df_aux_data = pd.DataFrame({'name':self.aux_data_names,
                                     'mean':self.train_aux_data_mean_sd[0],
                                     'sd':self.train_aux_data_mean_sd[1]})
         df_aux_data.to_csv(train_aux_data_norm_fn, index=False, sep=',',
-                           float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                           float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
         
         # training example index
         df_train_label_idx = pd.DataFrame(self.train_label_index, columns=['idx'])
-        print("df_train_label_idx")
-        print(df_train_label_idx)
+        # print("df_train_label_idx")
+        # print(df_train_label_idx)
  
         if self.has_label_num:
             # save label names, means, sd for new test dataset normalization
@@ -1540,14 +1532,14 @@ class CnnTrainer(Trainer):
                                       'mean':self.train_labels_num_mean_sd[0],
                                       'sd':self.train_labels_num_mean_sd[1]})
             df_labels.to_csv(train_labels_num_norm_fn, index=False, sep=',',
-                             float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                             float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
     
             # save CPI intervals
             df_cpi_intervals = pd.DataFrame(self.cpi_adjustments,
                                             columns=self.param_num_names)
             df_cpi_intervals.to_csv(model_cpi_fn,
                                     index=False, sep=',',
-                                    float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                                    float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
             
             # downsample all true training labels
             df_train_label_true = pd.DataFrame(self.train_label_num_true,
@@ -1562,7 +1554,7 @@ class CnnTrainer(Trainer):
             
             df_train_label_num_true.to_csv(train_label_num_true_fn,
                                             index=False, sep=',',
-                                            float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                                            float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
             
             # save train numerical label estimates
             self.train_label_num_est = util.denormalize(self.train_label_num_est,
@@ -1585,10 +1577,10 @@ class CnnTrainer(Trainer):
             # convert to csv and save
             df_train_label_num_est_nocalib.to_csv(train_label_est_nocalib_fn,
                                                    index=False, sep=',',
-                                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
             df_train_label_num_est_calib.to_csv(train_label_num_est_fn,
                                                  index=False, sep=',',
-                                                 float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                                                 float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
     
         if self.has_label_cat:
             # save true values for train categ. labels
@@ -1596,16 +1588,16 @@ class CnnTrainer(Trainer):
                                                    columns=self.param_cat_names )
             df_train_label_cat_true = pd.concat([df_train_label_idx, df_train_label_cat_true], axis=1 )
             df_train_label_cat_true.to_csv(train_label_cat_true_fn,
-                                           index=False, sep=',', mode='w')
+                                           index=False, sep=',', mode=write_mode)
     
             # save train categorical label estimates
             #print(self.train_label_cat_est)
             df_train_label_cat_est = self.train_label_cat_est #pd.DataFrame(self.train_label_cat_est[0:max_idx,:],
             #                                      columns=self.param_cat_names )
-            df_train_label_cat_est = pd.concat([df_train_label_idx, df_train_label_cat_est], axis=1 )
+            df_train_label_cat_est = pd.concat([df_train_label_idx, pd.DataFrame(df_train_label_cat_est)], axis=1 )
             df_train_label_cat_est.to_csv(train_label_cat_est_fn,
                                           index=False, sep=',',
-                                          float_format=util.PANDAS_FLOAT_FMT_STR, mode='w')
+                                          float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
         print("returning from save results")
 
         return
