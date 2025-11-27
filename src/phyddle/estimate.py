@@ -19,6 +19,8 @@ from tqdm import tqdm
 # standard imports
 import os
 import sys
+import threading
+import time
 sys.stdout.reconfigure(line_buffering=True)
 
 # external imports
@@ -182,7 +184,6 @@ class Estimator:
         self.log_dir            = str(args['log_dir'])
 
         self.calc_MLE           =bool(args['calc_MLE'])
-        self.load_MLE           =bool(args['load_MLE'])
         
         # dimensions
         self.tree_encode        = str(args['tree_encode'])
@@ -270,54 +271,57 @@ class Estimator:
                 yield open_f.read()
 
     def MLE(self, idx):
-        # print("idx data:")
-        # print(idx.iloc[:, 0])
-        # [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
+        print("idx data:")
+        print(idx.iloc[:, 0])
         file_names = [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
         phylogenies = []
         for f in file_names:
             with open(f, "r") as open_file:
                 phylogenies.append(open_file.read())
-        # phylogenies = [open(f, "r").read() for f in file_names]
 
-        # batch_size = 1
-        # batches = [phylogenies[i:i+batch_size] for i in range(0, len(phylogenies), batch_size)]
-        # results = thread_map(self.batch_mle, batches, max_workers=70, desc="Calculating MLE")
         mle_labels = []
         with ThreadPoolExecutor(max_workers=80) as executor:
             futures = {executor.submit(self.single_mle, phy): i for i, phy in enumerate(phylogenies)}
             for future in tqdm(as_completed(futures), total=len(futures), desc="Calculating MLE", ncols=100):
                 mle_labels.append(future.result())
-        cat("mle labels:")
-        print(mle_labels)        
+        print("mle labels:")
+        print(mle_labels)  
+        mle_labels = np.array(mle_labels, dtype=int)
+        print(mle_labels)
         return mle_labels
 
-    def batch_mle(self, batch):
-        results = [self.single_mle(phy) for phy in batch]
-        return results
 
     def single_mle(self, phy):
-        # print("opening single_mle")
         p = subprocess.Popen(
         ["python", "parallel_mle.py"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
         )
+
+        def watchdog():
+            time.sleep(300)
+            if p.poll() is None:
+                print("time out")
+                p.kill()
+                return -1
+
+        timer = threading.Thread(target=watchdog, daemon=True)
+        timer.start()
         try:
             pickle.dump(phy, p.stdin)
             p.stdin.close()
-            mle_label = pickle.load(p.stdout)
-        except Exception:
-            p.kill()
-            p.wait()
-            raise
+            try:
+                mle_label = pickle.load(p.stdout)
+                # print(mle_label)
+            except Exception:
+                print("time out")
+                return -1
         finally:
             p.stdout.close()
             p.stderr.close()
             p.wait()
-        # print(mle_label)
-        return mle_label
+        return int(mle_label[0])
     
     def run(self):
         """Executes all estimation tasks.
@@ -352,6 +356,7 @@ class Estimator:
         num_ljust = max([len(k) for k in self.param_est.keys()])
         for k,v in self.param_est.items():
             util.print_str(f'  ▪ {k.ljust(num_ljust)}  [type: {v}]', verbose)
+    
 
 
         # load Train input
@@ -421,12 +426,19 @@ class Estimator:
         # done
         util.print_str('... done!', verbose)
 
+        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
+        out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
         if self.calc_MLE:
             self.mle_labels = self.MLE(self.idx_data)
-            self.mle_labels.to_csv(out_est_labels_num_fn, index=False, sep=',',
+            print("self.mle_labels")
+            print(self.mle_labels)
+            print(out_est_mle_labels_cat_fn)
+            pd.DataFrame(self.mle_labels).to_csv(out_est_mle_labels_cat_fn, index=False, sep=',',
                                       float_format=util.PANDAS_FLOAT_FMT_STR)
-        elif self.load_MLE:
-            self.mle_labels = pd.read_csv(out_est_labels_num_fn, sep=',', index_col=False)
+
+
+
+
         return
 
 
@@ -750,13 +762,12 @@ class Estimator:
             path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical'
 
         model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        out_est_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
-        out_true_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
-        out_est_labels_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
-        out_true_labels_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
-        out_true_aux_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.aux.csv'
-        out_aux_names_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.aux_names.csv'
-        out_est_mle_labels_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_MLE_est.labels_num.csv'
+        out_est_labels_num_fn = f'{path_prefix}_est.labels_num.csv'
+        out_true_labels_num_fn = f'{path_prefix}_true.labels_num.csv'
+        out_est_labels_cat_fn = f'{path_prefix}_est.labels_cat.csv'
+        out_true_labels_cat_fn = f'{path_prefix}_true.labels_cat.csv'
+        out_true_aux_fn = f'{path_prefix}_true.aux.csv'
+        out_aux_names_fn = f'{path_prefix}_aux_names.csv'
 
 
     
@@ -805,8 +816,9 @@ class Estimator:
             df_est_labels_num = util.make_param_VLU_mtx(denorm_est_labels_num,
                                                          self.label_num_names)
             df_est_labels_num = pd.concat( [self.idx_data, df_est_labels_num], axis=1 )
-            df_est_labels_num.to_csv(out_est_mle_labels_num_fn, index=False, sep=',',
+            pd.DataFrame(df_est_labels_num).to_csv(out_est_labels_num_fn, index=False, sep=',',
                                       float_format=util.PANDAS_FLOAT_FMT_STR)
+
 
         self.idx_data = pd.DataFrame(self.idx_data)                              
         
@@ -817,6 +829,7 @@ class Estimator:
             df_est_labels_cat = pd.concat( [self.idx_data, df_est_labels_cat], axis=1 )
             df_est_labels_cat.to_csv(out_est_labels_cat_fn, index=False, sep=',',
                                      float_format=util.PANDAS_FLOAT_FMT_STR)
+
             
             # for k,v in labels_est_cat.items():
             #     labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()

@@ -428,11 +428,7 @@ class Formatter:
                                         'lbl': i[8]}
 
                 if i[6] != len(i[2]):
-                    print(i[3])
-                    print(i[4])
                     print("MISSMATCH!")
-                    print(i[6])
-                    print(len(i[2]))
                     quit()
 
         return
@@ -573,13 +569,6 @@ class Formatter:
 
             # Each entry is a dictionary of phylo-state, aux, data, and label
             res = [self.rep_data[idx] for idx in rep_idx ]
-            #edge_len = 0
-            #node_len = 0
-            #if len(res) > 0:
-          #  edge_len = len(np.append([x['graph_edges'] for x in res]))
-          #  node_len = len(np.append([x['graph_nodes'] for x in res]))
-          #  print("edge len " + str(edge_len))
-          #  print("node len " + str(node_len))
             dat_phy = hdf5_file.create_dataset('phy_data',
                                         (num_samples, num_data_length),
                                         dtype='f', compression='gzip')
@@ -686,9 +675,6 @@ class Formatter:
                 dat_lbl[:,:] = np.vstack( [ x['lbl'] for x in res ] )
                 
 
-    # close HDF5 files
-#        hdf5_file.close()
- #       print("KT: close files\n")
 
 
         return
@@ -963,7 +949,6 @@ class Formatter:
         if save_phyenc_csv_ and cpvs_data is not None:
             cpsv_str = util.ndarray_to_flat_str(cpvs_data.flatten()) + '\n'
             util.write_to_file(cpsv_str, cpsv_fn)
-            print("check")
             util.decode_cdvs_string(cpsv_str)
 
         # read in labels file
@@ -972,13 +957,16 @@ class Formatter:
             labels = pd.read_csv(lbl_fn, header=0)
             # print("labels:", labels)
             if labels['model_type'].iloc[0] not in self.select_classes:
-                # print("bad class")
                 return None
             
         # process parameters to estimate
         param_est = pd.DataFrame()
         if mode == 'sim':
             # split raw labels into est vs. data
+            assigned_labels = labels.columns.values.tolist()
+            for header in self.param_est:
+                if header not in assigned_labels:
+                    labels[header] = 10000000
             param_est = labels[self.param_est]
             # check label matching
 

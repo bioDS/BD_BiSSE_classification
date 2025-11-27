@@ -1717,7 +1717,7 @@ def encode_cdvs(phy, dat, tree_width, tree_encode_type, rescale=True):
     if rescale:
         heights = heights / np.max(heights)
     phylo_tensor = np.hstack( [heights, states] )
-    phy.write(file=sys.stdout, schema='newick')
+    # phy.write(file=sys.stdout, schema='newick')
     # print("heights:", heights.shape, heights)
     # print("states:", states.shape, states,)
     # print("phylo_tensor:", phylo_tensor.shape, phylo_tensor)

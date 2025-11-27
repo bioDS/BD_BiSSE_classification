@@ -147,10 +147,10 @@ class Plotter:
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
-        self.train_est_num_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
-        self.train_true_num_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
-        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
-        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
+        self.train_est_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
+        self.train_true_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
+        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
+        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
 
         # test dataset tensors
         if self.est_prefix == "":
@@ -158,12 +158,12 @@ class Plotter:
         else:
             path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
 
-        self.test_est_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_num.csv'
-        self.test_true_num_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_num.csv'
+        self.test_est_num_fn = f'{path_prefix}_est.labels_num.csv'
+        self.test_true_num_fn = f'{path_prefix}_true.labels_num.csv'
 
-        self.test_est_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_est.labels_cat.csv'
-        self.test_true_cat_fn = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.labels_cat.csv'
-        self.test_aux_fn =  f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}_true.aux.csv'
+        self.test_est_cat_fn = f'{path_prefix}_est.labels_cat.csv'
+        self.test_true_cat_fn = f'{path_prefix}_true.labels_cat.csv'
+        self.test_aux_fn =  f'{path_prefix}_true.aux.csv'
 
         print("test_est_cat_fn", self.test_est_cat_fn)
         # empirical dataset tensors
@@ -241,6 +241,10 @@ class Plotter:
         self.has_emp_num = False
         self.has_emp_cat = False
         self.has_train_fmt = False
+
+        self.load_MLE           =bool(args['load_MLE'])
+        self.mle_labels         = None
+
 
         # analysis info
         self.history_table = None  # init with load_input()
@@ -416,7 +420,6 @@ class Plotter:
             self.has_emp_cat = True
             self.emp_est_cat = self.emp_est_cat.drop(columns=['idx'])
 
-
         if self.has_train_fmt:
             # split training labels from format into real/cat
             self.train_labels_num = train_labels[self.param_name_num]
@@ -447,6 +450,14 @@ class Plotter:
 
         if self.emp_aux_data is not None:
             self.num_empirical = self.emp_aux_data.shape[0]
+
+
+        if self.load_MLE:
+            path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
+            out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
+            self.mle_labels = pd.read_csv(out_est_mle_labels_cat_fn, sep=',', index_col=False).to_numpy()
+            print("mle labels:")
+            print(self.mle_labels.flatten())
 
         # dataset dimensions
             
@@ -507,6 +518,9 @@ class Plotter:
         # training history stats
         self.make_plot_train_history()
 
+        if self.load_MLE:
+            self.comp_MLE(self.mle_labels, self.test_est_cat.to_numpy(), self.test_true_cat.to_numpy())
+
         # network architecture
        #self.make_plot_network_architecture()
         
@@ -514,6 +528,28 @@ class Plotter:
         return
 
     ##################################################
+
+    def comp_MLE(self, mle_labels, network_labels, true_labels):
+        mle_labels = mle_labels.flatten()
+        network_labels = network_labels.flatten()
+        true_labels = true_labels.flatten()
+        retain = mle_labels != -1
+        mle_labels = mle_labels[retain]
+        network_labels = network_labels[retain]
+        true_labels = true_labels[retain]
+        print(len(mle_labels), len(network_labels))
+        print("MLE")
+        print(mle_labels)
+        print("network")
+        print(network_labels)
+        print("true")
+        print(true_labels)
+        print("mle vs. network")
+        print(np.sum(mle_labels == network_labels) / len(mle_labels))
+        print("mle vs. true")
+        print(np.sum(mle_labels == true_labels) / len(mle_labels))
+        
+        return
 
     def make_plot_stat_density(self, dataset_name, dataset_type):
         """Calls plot_stat_density with arguments."""
@@ -581,12 +617,14 @@ class Plotter:
 
         print("calling make plot confusion matrix for dataset", dataset_name)
 
+
         if dataset_name == 'train':
             self.plot_confusion_matrix(ests=self.train_est_cat.copy(),
                                        labels=self.train_true_cat.copy(),
                                        prefix=self.save_train_est_fn,
                                        color=self.plot_train_color,
-                                       title='Train')
+                                       title='Train',
+                                       aux = None)
         elif dataset_name == 'test':
             self.plot_confusion_matrix(ests=self.test_est_cat.copy(),
                                        labels=self.test_true_cat.copy(),
@@ -661,69 +699,69 @@ class Plotter:
             
             #for b in range(len(bins)):
             
+            if isinstance(aux, pd.DataFrame):
+                for col in range(aux.shape[1]):
+                    bins=np.linspace(np.min(aux.iloc[:,col]), np.max(aux.iloc[:,col]), 11)
+                    binned_aux = np.empty(aux.shape[0]).astype(int)
+                    for index, row in aux.iterrows():
+                        b = 1
+                        while bins[b] < row.iloc[col]:
+                            b = b + 1
+                        binned_aux[index] = b
+                    binned_aux = binned_aux.astype(int)
 
-            for col in range(aux.shape[1]):
-                bins=np.linspace(np.min(aux.iloc[:,col]), np.max(aux.iloc[:,col]), 11)
-                binned_aux = np.empty(aux.shape[0]).astype(int)
-                for index, row in aux.iterrows():
-                    b = 1
-                    while bins[b] < row.iloc[col]:
-                        b = b + 1
-                    binned_aux[index] = b
-                binned_aux = binned_aux.astype(int)
+                    fig, ax = plt.subplots(3,math.ceil(len(np.unique(binned_aux))/3),figsize=(7, 7))
+                    ax =ax.flatten()
+                    binned_matrices = []
+                    for b in range(np.min(binned_aux), np.max(binned_aux)+1):
+                        sel_labels = labels[binned_aux == b]
+                        sel_ests = ests[binned_aux == b]
+                        binned_matrices.append(confusion_matrix(sel_labels, sel_ests))
+                    
+                    plt.rcParams.update({'font.size': 5})
+                    for b, matrix in enumerate(binned_matrices):
+                        cm = LinearSegmentedColormap.from_list(
+                        "Custom", ['white', color], N=20)
+                        cax = ax[b].matshow(matrix, cmap=cm, vmin=0.0, vmax=np.max(matrix))
+                        for (i, j), z in np.ndenumerate(matrix):
+                            text_color = 'black'
+                            if z > np.max(matrix)/2:
+                                text_color = 'white'
+                            ax[b].text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
+                                    color=text_color)
+                        ax[b].xaxis.set_ticks_position('bottom')
+                        cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
+                        # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
+                        # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
 
-                fig, ax = plt.subplots(3,math.ceil(len(np.unique(binned_aux))/3),figsize=(7, 7))
-                ax =ax.flatten()
-                binned_matrices = []
-                for b in range(np.min(binned_aux), np.max(binned_aux)+1):
-                    sel_labels = labels[binned_aux == b]
-                    sel_ests = ests[binned_aux == b]
-                    binned_matrices.append(confusion_matrix(sel_labels, sel_ests))
-                
-                plt.rcParams.update({'font.size': 5})
-                for b, matrix in enumerate(binned_matrices):
-                    cm = LinearSegmentedColormap.from_list(
-                    "Custom", ['white', color], N=20)
-                    cax = ax[b].matshow(matrix, cmap=cm, vmin=0.0, vmax=np.max(matrix))
-                    for (i, j), z in np.ndenumerate(matrix):
-                        text_color = 'black'
-                        if z > np.max(matrix)/2:
-                            text_color = 'white'
-                        ax[b].text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
-                                color=text_color)
-                    ax[b].xaxis.set_ticks_position('bottom')
-                    cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
-                    # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
-                    # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
-
-                    if self.num_classes == 4:
-                        ax[b].set_xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
-                    if self.num_classes == 2:
-                        ax[b].set_xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
-                    if b % 4 == 0:
-                        ax[b].set_xlabel(f'{p} estimate')
-                    else:
-                        ax[b].set_xticks([])
-                        ax[b].set_xlabel("")
-                    if self.num_classes == 4:
-                        ax[b].set_yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
-                    if self.num_classes == 2:
-                         ax[b].set_yticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
-                    if b == 0:
-                        ax[b].set_ylabel(f'{p} truth')
-                    else:
-                         ax[b].set_ylabel("")
+                        if self.num_classes == 4:
+                            ax[b].set_xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                        if self.num_classes == 2:
+                            ax[b].set_xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                        if b % 4 == 0:
+                            ax[b].set_xlabel(f'{p} estimate')
+                        else:
+                            ax[b].set_xticks([])
+                            ax[b].set_xlabel("")
+                        if self.num_classes == 4:
+                            ax[b].set_yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                        if self.num_classes == 2:
+                            ax[b].set_yticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                        if b == 0:
+                            ax[b].set_ylabel(f'{p} truth')
+                        else:
+                            ax[b].set_ylabel("")
 
 
-                    ax[b].set_title(f'quantile {b/10}')
-                for plot_ind in range(len(binned_matrices), len(ax)):
-                    ax[plot_ind].axis('off')
-                plt.suptitle(aux.columns[col], fontsize=15)
-                plt.savefig(fname=f'{prefix}_{p}_per_cat_binned_{aux.columns[col]}.pdf', format='pdf', dpi=300,
-                                bbox_inches='tight')
-                plt.clf()
-                plt.close()
-                plt.rcParams.update({'font.size': 12})
+                        ax[b].set_title(f'quantile {b/10}')
+                    for plot_ind in range(len(binned_matrices), len(ax)):
+                        ax[plot_ind].axis('off')
+                    plt.suptitle(aux.columns[col], fontsize=15)
+                    plt.savefig(fname=f'{prefix}_{p}_per_cat_binned_{aux.columns[col]}.pdf', format='pdf', dpi=300,
+                                    bbox_inches='tight')
+                    plt.clf()
+                    plt.close()
+                    plt.rcParams.update({'font.size': 12})
                 
                         
 

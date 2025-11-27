@@ -326,6 +326,7 @@ class CnnTrainer(Trainer):
         self.norm_calib_labels_num = None
         self.has_label_cat = False
         self.has_label_num = False
+        self.ignore_label_num = True
 
         self.scheduler="NA"
         
@@ -681,7 +682,8 @@ class CnnTrainer(Trainer):
                 idx_cat.append( idx )
                 self.param_cat_names.append(k)
                 
-            elif v == 'num':
+            # ignore numerical labels as a hack to pass parameter information for plotting without using it for predictions.
+            elif v == 'num' and self.ignore_label_num == False:
                 self.has_label_num = True
                 # print(self.label_names)
                 idx_num.append( self.label_names.index(k) )
