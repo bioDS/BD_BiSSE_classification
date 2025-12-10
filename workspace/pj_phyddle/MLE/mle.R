@@ -12,7 +12,8 @@ get_mle_label <- function(newick_str) {
     mle_BiSSE <- find.mle(lik_biSSE, p_BiSSE_start)
 
     LR <- 2 * (mle_BiSSE$lnLik - mle_BD$lnLik)
-    p_val <- pchisq(LR, df = (length(mle_BiSSE$par) - length(mle_BD$par)), lower.tail = FALSE)
+    p_val <- 0.5 * pchisq(LR, df = 1, lower.tail = FALSE)
+    # old df: length(mle_BiSSE$par) - length(mle_BD$par)
     return(p_val)
     # if (p_val < 0.1) { # 0.05
     #     return(1)
