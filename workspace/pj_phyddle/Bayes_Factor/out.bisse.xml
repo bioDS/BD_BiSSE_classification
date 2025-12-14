@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><beast beautitemplate='MSBDtemplate' beautistatus='' namespace="beast.core:beast.evolution.alignment:beast.evolution.tree.coalescent:beast.core.util:beast.evolution.nuc:beast.evolution.operators:beast.evolution.sitemodel:beast.evolution.substitutionmodel:beast.base.evolution.alignment:beast.pkgmgmt:beast.base.core:beast.base.inference:beast.base.evolution.tree.coalescent:beast.pkgmgmt:beast.base.core:beast.base.inference.util:beast.evolution.nuc:beast.base.evolution.operator:beast.base.inference.operator:beast.base.evolution.sitemodel:beast.base.evolution.substitutionmodel:beast.base.evolution.likelihood" required="BEAST.base v2.7.7:MSBD v2.0.5" version="2.7">
+
+    <data
+id="AItest"
+spec="Alignment"
+name="alignment">
+        <sequence id="nd625" spec="Sequence" taxon="nd625" totalcount="4" value="B"/>
+<sequence id="nd626" spec="Sequence" taxon="nd626" totalcount="4" value="A"/>
+<sequence id="nd337" spec="Sequence" taxon="nd337" totalcount="4" value="A"/>
+<sequence id="nd567" spec="Sequence" taxon="nd567" totalcount="4" value="A"/>
+<sequence id="nd249" spec="Sequence" taxon="nd249" totalcount="4" value="A"/>
+<sequence id="nd653" spec="Sequence" taxon="nd653" totalcount="4" value="A"/>
+<sequence id="nd654" spec="Sequence" taxon="nd654" totalcount="4" value="B"/>
+<sequence id="nd495" spec="Sequence" taxon="nd495" totalcount="4" value="B"/>
+<sequence id="nd303" spec="Sequence" taxon="nd303" totalcount="4" value="A"/>
+<sequence id="nd513" spec="Sequence" taxon="nd513" totalcount="4" value="B"/>
+<sequence id="nd514" spec="Sequence" taxon="nd514" totalcount="4" value="B"/>
+<sequence id="nd673" spec="Sequence" taxon="nd673" totalcount="4" value="A"/>
+<sequence id="nd674" spec="Sequence" taxon="nd674" totalcount="4" value="A"/>
+<sequence id="nd666" spec="Sequence" taxon="nd666" totalcount="4" value="A"/>
+<sequence id="nd616" spec="Sequence" taxon="nd616" totalcount="4" value="B"/>
+<sequence id="nd624" spec="Sequence" taxon="nd624" totalcount="4" value="A"/>
+<sequence id="nd574" spec="Sequence" taxon="nd574" totalcount="4" value="A"/>
+<sequence id="nd414" spec="Sequence" taxon="nd414" totalcount="4" value="A"/>
+<sequence id="nd521" spec="Sequence" taxon="nd521" totalcount="4" value="B"/>
+<sequence id="nd645" spec="Sequence" taxon="nd645" totalcount="4" value="B"/>
+<sequence id="nd646" spec="Sequence" taxon="nd646" totalcount="4" value="B"/>
+<sequence id="nd415" spec="Sequence" taxon="nd415" totalcount="4" value="B"/>
+<sequence id="nd631" spec="Sequence" taxon="nd631" totalcount="4" value="A"/>
+<sequence id="nd632" spec="Sequence" taxon="nd632" totalcount="4" value="A"/>
+<sequence id="nd501" spec="Sequence" taxon="nd501" totalcount="4" value="A"/>
+<sequence id="nd549" spec="Sequence" taxon="nd549" totalcount="4" value="B"/>
+<sequence id="nd550" spec="Sequence" taxon="nd550" totalcount="4" value="A"/>
+<sequence id="nd435" spec="Sequence" taxon="nd435" totalcount="4" value="B"/>
+<sequence id="nd440" spec="Sequence" taxon="nd440" totalcount="4" value="B"/>
+<sequence id="nd659" spec="Sequence" taxon="nd659" totalcount="4" value="A"/>
+<sequence id="nd558" spec="Sequence" taxon="nd558" totalcount="4" value="A"/>
+<sequence id="nd525" spec="Sequence" taxon="nd525" totalcount="4" value="A"/>
+<sequence id="nd526" spec="Sequence" taxon="nd526" totalcount="4" value="B"/>
+<sequence id="nd244" spec="Sequence" taxon="nd244" totalcount="4" value="B"/>
+<sequence id="nd641" spec="Sequence" taxon="nd641" totalcount="4" value="A"/>
+<sequence id="nd642" spec="Sequence" taxon="nd642" totalcount="4" value="B"/>
+<sequence id="nd552" spec="Sequence" taxon="nd552" totalcount="4" value="A"/>
+<sequence id="nd467" spec="Sequence" taxon="nd467" totalcount="4" value="A"/>
+<sequence id="nd597" spec="Sequence" taxon="nd597" totalcount="4" value="B"/>
+<sequence id="nd627" spec="Sequence" taxon="nd627" totalcount="4" value="A"/>
+<sequence id="nd628" spec="Sequence" taxon="nd628" totalcount="4" value="B"/>
+<sequence id="nd595" spec="Sequence" taxon="nd595" totalcount="4" value="B"/>
+<sequence id="nd599" spec="Sequence" taxon="nd599" totalcount="4" value="A"/>
+<sequence id="nd556" spec="Sequence" taxon="nd556" totalcount="4" value="A"/>
+<sequence id="nd559" spec="Sequence" taxon="nd559" totalcount="4" value="A"/>
+<sequence id="nd577" spec="Sequence" taxon="nd577" totalcount="4" value="B"/>
+<sequence id="nd578" spec="Sequence" taxon="nd578" totalcount="4" value="A"/>
+<sequence id="nd571" spec="Sequence" taxon="nd571" totalcount="4" value="B"/>
+<sequence id="nd572" spec="Sequence" taxon="nd572" totalcount="4" value="B"/>
+<sequence id="nd619" spec="Sequence" taxon="nd619" totalcount="4" value="A"/>
+<sequence id="nd620" spec="Sequence" taxon="nd620" totalcount="4" value="A"/>
+<sequence id="nd592" spec="Sequence" taxon="nd592" totalcount="4" value="B"/>
+<sequence id="nd637" spec="Sequence" taxon="nd637" totalcount="4" value="B"/>
+<sequence id="nd638" spec="Sequence" taxon="nd638" totalcount="4" value="B"/>
+<sequence id="nd473" spec="Sequence" taxon="nd473" totalcount="4" value="B"/>
+<sequence id="nd529" spec="Sequence" taxon="nd529" totalcount="4" value="B"/>
+<sequence id="nd539" spec="Sequence" taxon="nd539" totalcount="4" value="A"/>
+<sequence id="nd630" spec="Sequence" taxon="nd630" totalcount="4" value="A"/>
+<sequence id="nd622" spec="Sequence" taxon="nd622" totalcount="4" value="B"/>
+<sequence id="nd586" spec="Sequence" taxon="nd586" totalcount="4" value="B"/>
+<sequence id="nd570" spec="Sequence" taxon="nd570" totalcount="4" value="B"/>
+<sequence id="nd649" spec="Sequence" taxon="nd649" totalcount="4" value="A"/>
+<sequence id="nd650" spec="Sequence" taxon="nd650" totalcount="4" value="A"/>
+<sequence id="nd493" spec="Sequence" taxon="nd493" totalcount="4" value="B"/>
+<sequence id="nd587" spec="Sequence" taxon="nd587" totalcount="4" value="A"/>
+<sequence id="nd579" spec="Sequence" taxon="nd579" totalcount="4" value="B"/>
+<sequence id="nd576" spec="Sequence" taxon="nd576" totalcount="4" value="A"/>
+<sequence id="nd651" spec="Sequence" taxon="nd651" totalcount="4" value="A"/>
+<sequence id="nd652" spec="Sequence" taxon="nd652" totalcount="4" value="B"/>
+<sequence id="nd647" spec="Sequence" taxon="nd647" totalcount="4" value="B"/>
+<sequence id="nd648" spec="Sequence" taxon="nd648" totalcount="4" value="A"/>
+<sequence id="nd612" spec="Sequence" taxon="nd612" totalcount="4" value="B"/>
+<sequence id="nd564" spec="Sequence" taxon="nd564" totalcount="4" value="B"/>
+<sequence id="nd461" spec="Sequence" taxon="nd461" totalcount="4" value="A"/>
+<sequence id="nd462" spec="Sequence" taxon="nd462" totalcount="4" value="A"/>
+<sequence id="nd507" spec="Sequence" taxon="nd507" totalcount="4" value="B"/>
+<sequence id="nd484" spec="Sequence" taxon="nd484" totalcount="4" value="B"/>
+<sequence id="nd114" spec="Sequence" taxon="nd114" totalcount="4" value="B"/>
+<sequence id="nd277" spec="Sequence" taxon="nd277" totalcount="4" value="A"/>
+<sequence id="nd657" spec="Sequence" taxon="nd657" totalcount="4" value="A"/>
+<sequence id="nd658" spec="Sequence" taxon="nd658" totalcount="4" value="A"/>
+<sequence id="nd533" spec="Sequence" taxon="nd533" totalcount="4" value="A"/>
+<sequence id="nd534" spec="Sequence" taxon="nd534" totalcount="4" value="B"/>
+<sequence id="nd454" spec="Sequence" taxon="nd454" totalcount="4" value="A"/>
+<sequence id="nd311" spec="Sequence" taxon="nd311" totalcount="4" value="B"/>
+<sequence id="nd531" spec="Sequence" taxon="nd531" totalcount="4" value="B"/>
+<sequence id="nd532" spec="Sequence" taxon="nd532" totalcount="4" value="B"/>
+<sequence id="nd643" spec="Sequence" taxon="nd643" totalcount="4" value="B"/>
+<sequence id="nd671" spec="Sequence" taxon="nd671" totalcount="4" value="A"/>
+<sequence id="nd672" spec="Sequence" taxon="nd672" totalcount="4" value="A"/>
+<sequence id="nd635" spec="Sequence" taxon="nd635" totalcount="4" value="A"/>
+<sequence id="nd636" spec="Sequence" taxon="nd636" totalcount="4" value="B"/>
+<sequence id="nd565" spec="Sequence" taxon="nd565" totalcount="4" value="B"/>
+<sequence id="nd633" spec="Sequence" taxon="nd633" totalcount="4" value="B"/>
+<sequence id="nd634" spec="Sequence" taxon="nd634" totalcount="4" value="B"/>
+<sequence id="nd270" spec="Sequence" taxon="nd270" totalcount="4" value="A"/>
+<sequence id="nd432" spec="Sequence" taxon="nd432" totalcount="4" value="A"/>
+<sequence id="nd382" spec="Sequence" taxon="nd382" totalcount="4" value="A"/>
+<sequence id="nd581" spec="Sequence" taxon="nd581" totalcount="4" value="A"/>
+<sequence id="nd663" spec="Sequence" taxon="nd663" totalcount="4" value="B"/>
+<sequence id="nd664" spec="Sequence" taxon="nd664" totalcount="4" value="B"/>
+<sequence id="nd667" spec="Sequence" taxon="nd667" totalcount="4" value="B"/>
+<sequence id="nd668" spec="Sequence" taxon="nd668" totalcount="4" value="B"/>
+<sequence id="nd405" spec="Sequence" taxon="nd405" totalcount="4" value="A"/>
+<sequence id="nd407" spec="Sequence" taxon="nd407" totalcount="4" value="B"/>
+<sequence id="nd655" spec="Sequence" taxon="nd655" totalcount="4" value="B"/>
+<sequence id="nd656" spec="Sequence" taxon="nd656" totalcount="4" value="B"/>
+<sequence id="nd640" spec="Sequence" taxon="nd640" totalcount="4" value="B"/>
+<sequence id="nd614" spec="Sequence" taxon="nd614" totalcount="4" value="B"/>
+<sequence id="nd307" spec="Sequence" taxon="nd307" totalcount="4" value="B"/>
+<sequence id="nd601" spec="Sequence" taxon="nd601" totalcount="4" value="B"/>
+<sequence id="nd602" spec="Sequence" taxon="nd602" totalcount="4" value="A"/>
+<sequence id="nd669" spec="Sequence" taxon="nd669" totalcount="4" value="B"/>
+<sequence id="nd670" spec="Sequence" taxon="nd670" totalcount="4" value="A"/>
+<sequence id="nd661" spec="Sequence" taxon="nd661" totalcount="4" value="B"/>
+<sequence id="nd662" spec="Sequence" taxon="nd662" totalcount="4" value="B"/>
+<sequence id="nd583" spec="Sequence" taxon="nd583" totalcount="4" value="B"/>
+<sequence id="nd584" spec="Sequence" taxon="nd584" totalcount="4" value="B"/>
+
+           </data>
+
+    <map name="Uniform" >beast.base.inference.distribution.Uniform</map>
+
+    <map name="Exponential" >beast.base.inference.distribution.Exponential</map>
+
+    <map name="LogNormal" >beast.base.inference.distribution.LogNormalDistributionModel</map>
+
+    <map name="Normal" >beast.base.inference.distribution.Normal</map>
+
+    <map name="Beta" >beast.base.inference.distribution.Beta</map>
+
+    <map name="Gamma" >beast.base.inference.distribution.Gamma</map>
+
+    <map name="LaplaceDistribution" >beast.base.inference.distribution.LaplaceDistribution</map>
+
+    <map name="prior" >beast.base.inference.distribution.Prior</map>
+
+    <map name="InverseGamma" >beast.base.inference.distribution.InverseGamma</map>
+
+    <map name="OneOnX" >beast.base.inference.distribution.OneOnX</map>
+
+    <run id="mcmc" spec="nestedsampling.gss.NS" chainLength="10000000" particleCount="1" subChainLength="5000">
+        <state id="state" spec="State" storeEvery="5000">
+            <stateNode id="Tree.t:AItest" spec="msbd.base.evolution.tree.MultiRateTree" estimateTopology="false">
+            <taxonset id="TaxonSet.AItest" spec="TaxonSet">
+                <alignment idref="AItest"/>
+            </taxonset>
+            </stateNode>
+            <stateNode id="lambdas.t:AItest" spec="msbd.base.inference.parameter.ExtendableRealParameter" lower="0.1" upper="1" estimate="true">0.5</stateNode>
+            <stateNode id="mus.t:AItest" spec="msbd.base.inference.parameter.ExtendableRealParameter" lower="0.1" upper="0.9" estimate="true">0.25</stateNode>
+            <parameter id="gamma.t:AItest" spec="parameter.RealParameter" lower="0.0" name="stateNode" estimate="true">0.9</parameter>
+            <stateNode id="nstar.t:AItest" spec="parameter.IntegerParameter" lower="2">10</stateNode>
+        </state>
+        <init id="NewTree.t:AItest" spec="msbd.base.evolution.tree.MultiRateTreeFromNewick" initial="@Tree.t:AItest" isLabelledNewick="true" newick="((((nd625:0.4433293663183318,nd626:0.4433293663183318):11.478770370335742,((nd337:4.177506039268822,nd567:4.177506039268822):4.01617139260316,(nd249:6.1466102213257825,(nd653:0.18326290012289437,nd654:0.18326290012289437):5.963347321202888):2.047067210546208):3.7284223047820957):4.19806801608696,(nd495:11.058241821667716,((((nd303:4.639046475083738,(nd513:1.2725033397449503,nd514:1.2725033397449503):3.366543135338791):3.3822977087831267,((((nd673:0.021466783189855256,nd674:0.021466783189855256):0.06361811492098703,nd666:0.08508489811084229):0.4056468072581538,nd616:0.49073170536899596):1.569876016667878,(nd624:1.0203116561400467,nd574:1.0203116561400472):1.040296065896828):5.960736461829995):0.0794507105613487,(nd414:4.509951383033254,(nd521:2.355668320007835,(nd645:0.2887032735461264,nd646:0.2887032735461264):2.066965046461708):2.154283063025419):3.5908435113949597):1.1142326927807724,((nd415:4.214173270094478,((nd631:0.3593912680677405,nd632:0.3593912680677405):1.7757206302511293,(nd501:1.3337841889916369,(nd549:0.9413075977707193,nd550:0.9413075977707193):0.39247659122091716):0.8013277093272343):2.0790613717756075):3.529109254041423,((nd435:2.505369717673108,nd440:2.505369717673108):1.3894082624726258,(nd659:0.9075692261916011,nd558:0.9075692261916013):2.9872087539541354):3.8485045439901655):1.471745063073088):1.843214234458731):5.061925931073321):4.8861461290336985,(((((nd525:1.1529996824581974,nd526:1.1529996824581974):7.704789814557529,nd244:8.85778949701573):3.9563576726723717,((((((((nd641:0.31471574820246045,nd642:0.31471574820246045):0.6165307813216566,nd552:0.9312465295241175):1.127485284509067,(nd467:1.984778860044308,(((nd597:0.6924775313783484,(nd627:0.4283641417191301,nd628:0.4283641417191301):0.264113389659218):0.23747341185192905,(nd595:0.7032648944155359,nd599:0.7032648944155357):0.22668604881474164):0.377082323168231,nd556:1.3070332663985085):0.6777455936457997):0.07395295398887644):1.047019109912378,((((((nd559:0.897697834863121,(nd577:0.8282187045278986,nd578:0.8282187045278986):0.06947913033522238):0.868481307012078,(nd571:0.8548257989723784,nd572:0.8548257989723784):0.9113533429028206):0.11174411397666317,((nd619:0.48935540088794466,nd620:0.48935540088794466):0.806440523222392,nd592:1.295795924110337):0.5821273317415248):0.12162500212340968,(nd637:0.3188072641999546,nd638:0.3188072641999546):1.6807409937753164):0.3096633306523507,(nd473:1.892259742379083,(nd529:1.1335055003440009,nd539:1.1335055003440009):0.7587542420350822):0.41695184624853865):0.6911485078472236,(((nd630:0.47669533768290956,nd622:0.47669533768290956):0.27280611760069245,nd586:0.7495014552836026):0.10924149313418893,nd570:0.8587429484177915):2.141617148057055):0.10539082747071689):1.4279218802964464,((nd649:0.20007813487735837,nd650:0.20007813487735837):3.770031867473492,(nd493:1.6540329748916085,nd587:1.6540329748916078):2.3160770274592433):0.5635628018911583):4.2844478421327645,(nd579:6.153661894166372,(((nd576:3.647090811418761,(nd651:0.18502184399143531,nd652:0.18502184399143531):3.4620689674273257):0.05783883718880981,(nd647:0.22180166794103365,nd648:0.22180166794103365):3.483127980666537):0.8421649977440284,((nd612:0.8944592929188462,nd564:0.8944592929188466):3.412483471707967,(nd461:2.0157736822771364,nd462:2.0157736822771364):2.291169082349678):0.24015188172478408):1.6065672478147721):2.6644587522084047):1.3520230364210375,(nd507:1.8598846451524418,nd484:1.8598846451524416):8.31025903764337):1.2002999010559157,nd114:11.370443583851712):1.4437035858363707):3.712270349089942,((nd277:7.6685782312805255,(((nd657:0.15015776811655818,nd658:0.15015776811655818):4.1990260545014015,((nd533:1.0325983840648498,nd534:1.0325983840648498):1.0473696878384793,nd454:2.0799680719033287):2.2692157507146296):0.49097676447538174,nd311:4.8401605870933375):2.828417644187187):5.488765112898518,(((nd531:1.1097747225942787,nd532:1.1097747225942787):5.353088536953877,((((nd643:0.3011019013213679,(nd671:0.055286406598290566,nd672:0.055286406598290566):0.24581549472307734):0.4131491731894524,(nd635:0.3195290753329078,nd636:0.3195290753329078):0.3947219991779125):0.23392274293013532,(nd565:0.8892369910507267,(nd633:0.3311892266334843,nd634:0.3311892266334843):0.5580477644172421):0.05893682639022935):4.465135805533062,nd270:5.413309622974019):1.0495536365741343):5.176634728618829,(nd432:3.4373601484925924,nd382:3.4373601484925937):8.202137839674386):1.517845356012065):3.3690741745989916):2.3684266276684114,((((nd581:0.765385587325662,(nd663:0.13424626848380827,nd664:0.13424626848380827):0.6311393188418535):3.3332960309233366,(nd667:0.08364507879977287,nd668:0.08364507879977287):4.015036539449226):5.944770639887741,(nd405:2.959877682252104,(nd407:2.931637375310337,(((nd655:0.15764950775832945,nd656:0.15764950775832945):0.1601150401390092,nd640:0.3177645478973386):0.5784623196544894,nd614:0.8962268675518279):2.0354105077585096):0.028240306941767185):7.083574575884632):5.126563614923738,(((nd307:4.608898829560673,(nd601:0.6429866749258735,nd602:0.6429866749258735):3.965912154634804):3.0201234615600865,(nd669:0.07615988472670064,nd670:0.07615988472670064):7.552862406394063):3.973251652652197,((nd661:0.14256465454394965,nd662:0.14256465454394965):1.5148546514178145,(nd583:0.7595144418018092,nd584:0.7595144418018092):0.8979048641599549):9.94485463781119):3.5677419292875134):3.7248282733859726):2.1114697353282894):0.0;"/>
+        <distribution id="posterior" spec="CompoundDistribution">
+            <distribution id="prior" spec="CompoundDistribution">
+                <prior id="gammaPrior.t:AItest" name="distribution" x="@gamma.t:AItest">
+                    <LogNormal id="LogNormalDistributionModel.3" name="distr">
+                        <parameter id="RealParameter.6" spec="parameter.RealParameter" estimate="false" name="M">-4.0</parameter>
+                        <parameter id="RealParameter.7" spec="parameter.RealParameter" estimate="false" lower="0.0" name="S" upper="5.0">1.0</parameter>
+                    </LogNormal>
+                </prior>
+                <prior id="l0" name="distribution" x="@lambdas.t:AItest">
+                    <Uniform id="Uniform.l0" lower="0.1" upper="1" name="distr"/>
+                </prior>
+                <prior id="m0" name="distribution" x="@mus.t:AItest">
+                    <Uniform id="Uniform.m0" lower="0.1"  name="distr" upper="0.9"/>
+                </prior>
+                <!-- <prior id="lambdasPrior.t:AItest" name="distribution" x="@lambdas.t:AItest">
+                    <Uniform id="Uniform.5" lower="0.1" upper="1" name="distr"/>
+                </prior>
+                <prior id="musPrior.t:AItest" name="distribution" x="@mus.t:AItest">
+                    <Uniform id="Uniform.6" lower="0.1" upper="0.9" name="distr" upper="0.9"/>
+                </prior> -->
+                <prior id="nstarPrior.t:AItest" name="distribution" x="@nstar.t:AItest">
+                    <distr id="Poisson.0" spec="distribution.Poisson">
+                        <parameter id="RealParameter.12" spec="parameter.RealParameter" estimate="false" name="lambda">4.0</parameter>
+                    </distr>
+                </prior>
+                <distribution id="stdBDMRT.t:AItest" spec="msbd.distributions.StdBirthDeathDensity" multiRateTree="@Tree.t:AItest">
+                    <stateChangeModel id="stdscModel.t:AItest" spec="msbd.evolution.tree.StateChangeModel" gamma="@gamma.t:AItest" lambdas="@lambdas.t:AItest" mus="@mus.t:AItest" nstar="@nstar.t:AItest">
+                        <psis id="stdpsis.t:AItest" spec="msbd.base.inference.parameter.ExtendableRealParameter" lower="0.0">0.5</psis>
+                        <parameter id="rho.t:AItest" spec="parameter.RealParameter" estimate="false" lower="0.0" name="rho" upper="1.0">1</parameter>
+                        <parameter id="stdsigma.t:AItest" spec="parameter.RealParameter" estimate="false" lower="0.0" name="sigma" upper="1.0">0.0</parameter>
+                    </stateChangeModel>
+                </distribution>
+            </distribution>
+            <distribution id="likelihood" spec="CompoundDistribution" useThreads="true">
+                <distribution id="treeLikelihood.AItest" spec="ThreadedTreeLikelihood" data="@AItest" tree="@Tree.t:AItest">
+                    <siteModel id="SiteModel.s:AItest" spec="SiteModel">
+                        <parameter id="mutationRate.s:AItest" spec="parameter.RealParameter" estimate="false" name="mutationRate">1.0</parameter>
+                        <parameter id="gammaShape.s:AItest" spec="parameter.RealParameter" estimate="false" name="shape">1.0</parameter>
+                        <parameter id="proportionInvariant.s:AItest" spec="parameter.RealParameter" estimate="false" lower="0.0" name="proportionInvariant" upper="1.0">0.0</parameter>
+                        <substModel id="JC69.s:AItest" spec="JukesCantor"/>
+                    </siteModel>
+                    <branchRateModel id="StrictClock.c:AItest" spec="beast.base.evolution.branchratemodel.StrictClockModel">
+                        <parameter id="clockRate.c:AItest" spec="parameter.RealParameter" estimate="false" name="clock.rate">1.0</parameter>
+                    </branchRateModel>
+                </distribution>
+            </distribution>
+        </distribution>
+       <operator id="lambdasScaler.t:AItest" spec="kernel.BactrianScaleOperator" parameter="@lambdas.t:AItest" scaleFactor="0.4" upper="10.0" weight="10.0"/>
+        <operator id="musScaler.t:AItest" spec="kernel.BactrianScaleOperator" parameter="@mus.t:AItest" scaleFactor="0.4" upper="10.0" weight="10.0"/>
+        <operator id="gammaScaler.t:AItest" spec="kernel.BactrianScaleOperator" parameter="@gamma.t:AItest" scaleFactor="0.4" upper="10.0" weight="10.0"/>
+        <operator id="nstarScaler.t:AItest" spec="operator.IntRandomWalkOperator" parameter="@nstar.t:AItest" weight="10.0" windowSize="2"/>
+        <operator id="stdNR.t:AItest" spec="msbd.evolution.operator.NodeRetype" multiRateTree="@Tree.t:AItest" stateChangeModel="@stdscModel.t:AItest" weight="10.0"/>
+        <operator id="stdAddRemoveStates.t:AItest" spec="msbd.evolution.operator.AddRemoveColourWPropagation" lambdaDistribution="@Uniform.l0" muDistribution="@Uniform.m0" multiRateTree="@Tree.t:AItest" stateChangeModel="@stdscModel.t:AItest" weight="20.0">
+            <LogNormal id="LogNormalDistributionModel.p0" name="psiDistribution">
+                <parameter id="RealParameter.4" spec="parameter.RealParameter" estimate="false" name="M">1.5</parameter>
+                <parameter id="RealParameter.5" spec="parameter.RealParameter" estimate="false" lower="0.0" name="S" upper="5.0">2.0</parameter>
+            </LogNormal>
+        </operator>
+        <operator id="stdMoveShifts.t:AItest" spec="msbd.evolution.operator.MoveColourChange" multiRateTree="@Tree.t:AItest" stateChangeModel="@stdscModel.t:AItest" weight="10.0"/>
+        <operator id="stdChangeColours.t:AItest" spec="msbd.evolution.operator.AddRemoveConnectedWPropagation" multiRateTree="@Tree.t:AItest" stateChangeModel="@stdscModel.t:AItest" weight="20.0"/>
+        <logger id="tracelog" spec="Logger" fileName="$(filebase).log" logEvery="10000">
+            <log idref="posterior"/>
+            <log idref="likelihood"/>
+            <log idref="prior"/>
+            <log idref="lambdas.t:AItest"/>
+            <log idref="mus.t:AItest"/>
+            <log idref="gamma.t:AItest"/>
+            <log id="totalStateChanges.t:AItest" spec="msbd.util.StateChangesCountLogger" multiRateTree="@Tree.t:AItest"/>
+        </logger>
+        <logger id="screenlog" spec="Logger" logEvery="10000">
+            <log idref="posterior"/>
+            <log idref="likelihood"/>
+            <log idref="prior"/>
+            <log idref="lambdas.t:AItest"/>
+            <log idref="mus.t:AItest"/>
+        </logger>
+        <logger id="stdratestreelog.t:AItest" spec="Logger" fileName="$(filebase).AItest.rates.trees" logEvery="10000" mode="tree">
+            <log id="TreeWithParameterValuesLogger.0" spec="msbd.util.TreeWithParameterValuesLogger" logChangeNodes="false" stateChangeModel="@stdscModel.t:AItest" tree="@Tree.t:AItest"/>
+        </logger>
+        <logger id="stdStateslog.t:AItest" spec="Logger" fileName="$(filebase).AItest.states.log" logEvery="10000">
+            <log id="StateChangeModelLogger.0" spec="msbd.util.StateChangeModelLogger" maxStates="2" stateChangeModel="@stdscModel.t:AItest"/>
+        </logger>
+        <logger id="stdrateslog.t:AItest" spec="Logger" fileName="$(filebase).AItest.rates.log" logEvery="10000">
+            <log id="TipRatesLogger.0" spec="msbd.util.TipRatesLogger" multiRateTree="@Tree.t:AItest" stateChangeModel="@stdscModel.t:AItest"/>
+        </logger>
+    </run>
+
+</beast>
