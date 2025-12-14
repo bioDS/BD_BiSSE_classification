@@ -145,7 +145,7 @@ name="alignment">
 
     <map name="OneOnX" >beast.base.inference.distribution.OneOnX</map>
 
-    <run id="mcmc" spec="nestedsampling.gss.NS" chainLength="1000000" particleCount="1" subChainLength="5000">
+    <run id="mcmc" spec="nestedsampling.gss.NS" chainLength="10000000" particleCount="1" subChainLength="5000">
         <state id="state" spec="State" storeEvery="5000">
 <stateNode spec='beast.base.evolution.tree.TreeParser' id='Tree.t:AItest' IsLabelledNewick='true' adjustTipHeights='false'
  taxa='@AItest'
