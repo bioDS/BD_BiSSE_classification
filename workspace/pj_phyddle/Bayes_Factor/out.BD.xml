@@ -190,9 +190,9 @@ name="alignment">
                 </distribution>
             </distribution>
         </distribution>
-        <operator id="BirthDeathBICEPSEpochTop.t:AItest" spec="EpochFlexOperator" scaleFactor="0.1" tree="@Tree.t:AItest" weight="2.0"/>
+        <!-- <operator id="BirthDeathBICEPSEpochTop.t:AItest" spec="EpochFlexOperator" scaleFactor="0.1" tree="@Tree.t:AItest" weight="2.0"/>
         <operator id="BirthDeathBICEPSEpochAll.t:AItest" spec="EpochFlexOperator" fromOldestTipOnly="false" scaleFactor="0.1" tree="@Tree.t:AItest" weight="2.0"/>
-        <operator id="BirthDeathBICEPSTreeFlex.t:AItest" spec="TreeStretchOperator" scaleFactor="0.01" tree="@Tree.t:AItest" weight="2.0"/>
+        <operator id="BirthDeathBICEPSTreeFlex.t:AItest" spec="TreeStretchOperator" scaleFactor="0.01" tree="@Tree.t:AItest" weight="2.0"/> -->
         <operator id="BirthDeathUniformOperator.t:AItest" spec="kernel.BactrianNodeOperator" tree="@Tree.t:AItest" weight="30.0"/>
         <operator id="BirthRateScaler.t:AItest" spec="kernel.BactrianScaleOperator" parameter="@BDBirthRate.t:AItest" upper="10.0" weight="3.0"/>
         <operator id="DeathRateScaler.t:AItest" spec="kernel.BactrianScaleOperator" parameter="@BDDeathRate.t:AItest" upper="10.0" weight="3.0"/>
