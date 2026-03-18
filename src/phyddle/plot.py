@@ -102,6 +102,8 @@ class Plotter:
         self.optimizer          = str(args['optimizer'])
 
         self.learning_rate      = float(args['learning_rate'])
+        self.regularisation = str(args['regularisation'])
+
 
         # dataset info
         self.tensor_format = str(args['tensor_format'])
@@ -121,7 +123,7 @@ class Plotter:
         self.plot_pca_noise = float(args['plot_pca_noise'])
         self.num_classes = int(args['num_classes'])
 
-        self.scheduler="NA"#CosineAnnealingLR
+        self.scheduler="manual"#CosineAnnealingLR
 
 
         # phy data dimension
@@ -140,23 +142,27 @@ class Plotter:
         plt_proj_prefix = f'{self.plt_dir}/{self.plt_prefix}'
 
         # train dataset, main dataset
-        self.train_hdf5_fn = f'{fmt_proj_prefix}.{self.est_dir}.train.hdf5'
+        self.train_hdf5_fn = f'{fmt_proj_prefix}.train.hdf5'
+        print("self.train.hdf5.fn")
+        print(self.train_hdf5_fn)
+        self.test_hdf5_fn = f'{fmt_proj_prefix}.test.hdf5'
+
         self.train_phy_data_fn = f'{fmt_proj_prefix}.train.phy_data.csv'
         self.train_aux_data_fn = f'{fmt_proj_prefix}.train.aux_data.csv'
 
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
-        self.train_est_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
-        self.train_true_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
-        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
-        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
+        self.train_est_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num.csv'
+        self.train_true_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_num.csv'
+        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_cat.csv'
+        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_cat.csv'
 
         # test dataset tensors
         if self.est_prefix == "":
-            path_prefix = f'{est_proj_prefix}/{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+            path_prefix = f'{est_proj_prefix}/{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
         else:
-            path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test'
+            path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
 
         self.test_est_num_fn = f'{path_prefix}_est.labels_num.csv'
         self.test_true_num_fn = f'{path_prefix}_true.labels_num.csv'
@@ -164,6 +170,7 @@ class Plotter:
         self.test_est_cat_fn = f'{path_prefix}_est.labels_cat.csv'
         self.test_true_cat_fn = f'{path_prefix}_true.labels_cat.csv'
         self.test_aux_fn =  f'{path_prefix}_true.aux.csv'
+        self.test_props_fn =  f'{path_prefix}_true.props.csv'
 
         print("test_est_cat_fn", self.test_est_cat_fn)
         # empirical dataset tensors
@@ -174,36 +181,36 @@ class Plotter:
         self.emp_est_cat_fn = f'{est_proj_prefix}.empirical_est.labels_cat.csv'
 
         # network
-        self.model_arch_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
+        self.model_arch_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
+        self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
 
         # new empirical plot
         self.save_cpi_est_fn = f'{plt_proj_prefix}.empirical_estimate'
 
         # PCA plotting output
-        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_phy_data.pdf'
-        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_aux_data.pdf'
-        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_pca_labels_num.pdf'
+        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_phy_data.pdf'
+        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_aux_data.pdf'
+        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_labels_num.pdf'
         # self.save_emp_pca_aux_data_fn    = f'{plt_proj_prefix}.empirical_pca_contour_aux_data.pdf'
         # self.save_emp_pca_labels_fn      = f'{plt_proj_prefix}.empirical_pca_contour_labels_num.pdf'
 
         # density plotting output
-        self.save_train_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_density_aux_data.pdf'
-        self.save_train_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_density_labels_num.pdf'
-        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical_density_aux_data.pdf'
-        self.save_emp_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.empirical_density_labels_num.pdf'
+        self.save_train_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_density_aux_data.pdf'
+        self.save_train_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_density_labels_num.pdf'
+        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical_density_aux_data.pdf'
+        self.save_emp_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical_density_labels_num.pdf'
 
         # scatter plotting output
-        self.save_train_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_estimate'
-        self.save_test_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.test_estimate'
+        self.save_train_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_estimate'
+        self.save_test_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test_estimate'
 
         # network plotting output
-        self.save_network_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.network_architecture.pdf'
-        self.save_history_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history'
+        self.save_network_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.network_architecture.pdf'
+        self.save_history_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history'
 
         # summary plotting output
-        self.save_summary_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.summary.pdf'
-        self.save_report_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.summary.csv'
+        self.save_summary_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.summary.pdf'
+        self.save_report_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.summary.csv'
 
         # cat vs. real parameter names
         self.param_name_num = [k for k, v in self.param_est.items() if
@@ -214,6 +221,7 @@ class Plotter:
         # initialized later
         self.train_phy_data = None
         self.train_aux_data = None  # init with load_input()
+        self.test_label_as_aux = None
         self.train_labels_num = None  # init with load_input()
         self.train_labels_cat = None  # init with load_input()
         self.emp_phy_data = None # init with load_input()
@@ -233,6 +241,8 @@ class Plotter:
         self.emp_est_num = None  # init with load_input()
         self.emp_est_cat = None  # init with load_input()
 
+        self.test_lbl_data_names = None
+
         # what datasets do we have?
         self.has_train_num = False
         self.has_train_cat = False
@@ -243,7 +253,7 @@ class Plotter:
         self.has_train_fmt = False
 
         self.load_MLE           =bool(args['load_MLE'])
-        self.mle_labels         = None
+        self.LRT_labels         = None
 
 
         # analysis info
@@ -344,6 +354,7 @@ class Plotter:
                 train_labels = pd.DataFrame(hdf5_file['labels'][:, :],
                                             columns=train_label_names)
                 self.num_nodes =  pd.DataFrame(hdf5_file['num_nodes'][:, :])
+                
                 hdf5_file.close()
                 self.has_train_fmt = True
             except FileNotFoundError:
@@ -375,9 +386,23 @@ class Plotter:
         # test true/estimated labels
         self.test_est_num = util.read_csv_as_pandas(self.test_est_num_fn)
         self.test_true_num = util.read_csv_as_pandas(self.test_true_num_fn)
+        print(self.test_true_num_fn)
         self.test_est_cat = util.read_csv_as_pandas(self.test_est_cat_fn)
         self.test_true_cat = util.read_csv_as_pandas(self.test_true_cat_fn)
         self.test_true_aux = util.read_csv_as_pandas(self.test_aux_fn)
+        self.test_true_prop = util.read_csv_as_pandas(self.test_props_fn)
+        hdf5_file = h5py.File(self.test_hdf5_fn, 'r')
+        self.test_lbl_data_names = [s.decode() for s in
+                                        hdf5_file['label_names'][0, :]]
+        self.test_label_as_aux = pd.DataFrame(hdf5_file['labels'][:, :],
+                                                   columns=self.test_lbl_data_names).iloc[:,1:]
+        print("initial test true aux")
+        print(self.test_true_aux)
+        print("labels as aux")
+        print(self.test_label_as_aux)
+        self.test_true_aux = pd.concat([self.test_true_aux, self.test_label_as_aux, self.test_true_prop], axis =1)
+        print("combined")
+        print(self.test_true_aux)
 
         # empirical estimated labels
 
@@ -454,10 +479,10 @@ class Plotter:
 
         if self.load_MLE:
             path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
-            out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
-            self.mle_labels = pd.read_csv(out_est_mle_labels_cat_fn, sep=',', index_col=False).to_numpy()
-            print("mle labels:")
-            print(self.mle_labels.flatten())
+            out_est_LRT_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
+            self.LRT_labels = pd.read_csv(out_est_LRT_labels_cat_fn, sep=',', index_col=False).to_numpy()
+            print("LRT labels:")
+            print(self.LRT_labels.flatten())
 
         # dataset dimensions
             
@@ -519,7 +544,7 @@ class Plotter:
         self.make_plot_train_history()
 
         if self.load_MLE:
-            self.comp_MLE(self.mle_labels, self.test_est_cat.to_numpy(), self.test_true_cat.to_numpy())
+            self.comp_LRT(self.LRT_labels, self.test_est_cat.to_numpy(), self.test_true_cat.to_numpy(), self.test_true_aux, self.save_test_est_fn)
 
         # network architecture
        #self.make_plot_network_architecture()
@@ -529,26 +554,347 @@ class Plotter:
 
     ##################################################
 
-    def comp_MLE(self, mle_labels, network_labels, true_labels):
-        mle_labels = mle_labels.flatten()
+    def comp_LRT(self, LRT_labels, network_labels, true_cat_labels, true_aux, prefix):
+        LRT_labels = LRT_labels.flatten()
         network_labels = network_labels.flatten()
-        true_labels = true_labels.flatten()
-        retain = mle_labels != -1
-        mle_labels = mle_labels[retain]
+        true_cat_labels = true_cat_labels.flatten()
+        retain = LRT_labels != -1
+        LRT_labels = LRT_labels[retain]
         network_labels = network_labels[retain]
-        true_labels = true_labels[retain]
-        print(len(mle_labels), len(network_labels))
-        print("MLE")
-        print(mle_labels)
+        true_cat_labels = true_cat_labels[retain]
+        true_aux_names = true_aux.columns
+        print("colnames:")
+        print(true_aux_names)
+        true_aux = true_aux[retain].to_numpy()
+
+        correct = LRT_labels == true_cat_labels
+        print("correct:", len(correct))
+        print(correct)
+        incorrect = ~correct
+        corr_LRT_labels = LRT_labels[correct]
+        corr_network_labels = network_labels[correct]
+        corr_true_cat_labels = true_cat_labels[correct]
+        corr_aux = true_aux[correct]
+        incorr_LRT_labels = LRT_labels[incorrect]
+        incorr_network_labels = network_labels[incorrect]
+        incorr_true_cat_labels = true_cat_labels[incorrect]
+        incorr_aux = true_aux[incorrect]
+        
+        print(len(LRT_labels), len(network_labels))
+        print("LRT")
+        print(LRT_labels)
         print("network")
         print(network_labels)
         print("true")
-        print(true_labels)
-        print("mle vs. network")
-        print(np.sum(mle_labels == network_labels) / len(mle_labels))
-        print("mle vs. true")
-        print(np.sum(mle_labels == true_labels) / len(mle_labels))
+        print(true_cat_labels)
+        print("LRT vs. network")
+        print(np.sum(LRT_labels == network_labels) / len(LRT_labels))
+        print("LRT vs. true")
+        print(np.sum(LRT_labels == true_cat_labels) / len(LRT_labels))
+        print("corr aux")
+        print(corr_aux)
+        print("incorr aux")
+        print(incorr_aux)
+
+        relevant = len(self.test_label_as_aux.columns)
+        print("relevant:", relevant)
+        fig, (ax) = plt.subplots(nrows=2, ncols=math.ceil(relevant/2)*2, figsize=(12, 12)) # -1
+
+        ax =ax.flatten()
+        fig.tight_layout()
+        corr_aux = [col[col < 100000] for col in corr_aux.T] 
+        incorr_aux = [col[col < 100000] for col in incorr_aux.T]
+        print(true_aux.shape[1])
+
+        offset = true_aux.shape[1] - relevant
+        print("offset:", offset)
+        print(incorr_aux[8])
+        for col in range(offset, true_aux.shape[1] - 2):
+            ax[2*(col-offset)].set_ylim(0,1)
+            ax[2*(col-offset)+1].set_ylim(0,1)
+            print("col", col)
+            ax[2*(col-offset) ].violinplot(10 ** (corr_aux[col])) # -1
+            ax[2*(col-offset)+1].violinplot(10 ** (incorr_aux[col])) # -2
+            ax[2*(col-offset)].set_title("Good\n" + true_aux_names[col])
+            ax[2*(col-offset)+1].set_title("Bad\n" + true_aux_names[col])
+
+        plt.savefig(fname=f'{prefix}_violin.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+
+
+
+        plt.scatter(10 ** corr_aux[4], 10 ** corr_aux[5], label="Correct LRT")
+        plt.scatter(10 ** incorr_aux[4], 10 ** incorr_aux[5], label="Incorrect LRT")
+        plt.legend()
+        plt.xlabel("birth t1")
+        plt.ylabel("birth t2")
+        plt.savefig(fname=f'{prefix}_LRT_comp_birth_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter(10 ** corr_aux[6], 10 ** corr_aux[7], label="Correct LRT")
+        plt.scatter(10 ** incorr_aux[6], 10 ** incorr_aux[7], label="Incorrect LRT")
+        plt.legend()
+        plt.xlabel("death t1")
+        plt.ylabel("death t2")
+        plt.savefig(fname=f'{prefix}_LRT_comp_death_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter((10 ** (corr_aux[4]) - 10 ** corr_aux[6]), (10 ** (corr_aux[5]) - 10 ** corr_aux[7]), label="Correct LRT")
+        plt.scatter((10 ** (incorr_aux[4]) - 10 ** incorr_aux[6]), (10 ** (incorr_aux[5]) - 10 ** incorr_aux[7]), label="Incorrect LRT")
+        plt.legend()
+        plt.xlabel(f'div t1')
+        plt.ylabel(f'div t2')
+        plt.savefig(fname=f'{prefix}_LRT_comp_div_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        props_index =  (LRT_labels == true_cat_labels) & (true_cat_labels == 1)
+        incorr_props_index =  (LRT_labels != true_cat_labels) & (true_cat_labels == 1) & (LRT_labels != -1)
+        corr_props = true_aux[props_index].T
+        incorr_props = true_aux[incorr_props_index].T
+        plt.scatter(corr_props[9], corr_props[8], label="Correct LRT")
+        plt.scatter(incorr_props[9], incorr_props[8], label="Incorrect LRT")
+        plt.legend()
+        plt.xlabel(f'Proportion of majority state tree nodes')
+        plt.ylabel(f'index')
+        plt.savefig(fname=f'{prefix}_LRT_comp_prop_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter((10 ** (corr_aux[4]) + 10 ** corr_aux[6])/20, (10 ** (corr_aux[5]) + 10 ** corr_aux[7])/20, label="Correct LRT")
+        plt.scatter((10 ** (incorr_aux[4]) + 10 ** incorr_aux[6])/20, (10 ** (incorr_aux[5]) + 10 ** incorr_aux[7])/20, label="Incorrect LRT")
+        plt.legend()
+        plt.xlabel(f'q0 (lambda avg.)')
+        plt.ylabel(f'mu avg.')
+        plt.savefig(fname=f'{prefix}_LRT_comp_q0_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        fig, (ax) = plt.subplots(nrows=1, ncols=2, figsize=(8, 8)) # -1
+        ax =ax.flatten()
+        fig.tight_layout()
+        ax[0].violinplot(corr_props[9]) 
+        ax[1].violinplot(incorr_props[9])
+        ax[0].set_title("Good \nprops\nLRT")
+        ax[1].set_title("Bad\nprops\nLRT")
+        plt.savefig(fname=f'{prefix}_LRT_props_violin.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        fig, (ax) = plt.subplots(nrows=1, ncols=2, figsize=(8, 8)) # -1
+        ax =ax.flatten()
+        fig.tight_layout()
+        ax[0].hist(corr_props[9]) 
+        ax[1].hist(incorr_props[9])
+        ylim = [0,25]
+        ax[0].set_ylim(ylim)
+        ax[1].set_ylim(ylim)
+        ax[0].set_title("Proportion of states\n for correct predictions:\nLRT")
+        ax[1].set_title("Proportion of states\n for incorrect predictions:\nLRT")
+        plt.savefig(fname=f'{prefix}_LRT_props_hist.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter(10 ** corr_aux[2], 10 ** corr_aux[3], label="Correct LRT (new)")
+        plt.scatter(10 ** incorr_aux[2], 10 ** incorr_aux[3], label="Incorrect LRT (new)")
+        plt.legend()
+        plt.xlabel(f'birth')
+        plt.ylabel(f'death')
+        plt.savefig(fname=f'{prefix}_LRT_comp_birth_death_BD.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        correct_net = network_labels == true_cat_labels
+        incorrect_net = ~correct_net
+        corr_net_LRT_labels = LRT_labels[correct_net]
+        corr_net_network_labels = network_labels[correct_net]
+        corr_net_true_cat_labels = true_cat_labels[correct_net]
+        corr_net_aux = true_aux[correct_net]
+        incorr_net_LRT_labels = LRT_labels[incorrect_net]
+        incorr_net_network_labels = network_labels[incorrect_net]
+        incorr_net_true_cat_labels = true_cat_labels[incorrect_net]
+        incorr_net_aux = true_aux[incorrect_net]
+        corr_net_aux = [col[col < 100000] for col in corr_net_aux.T] 
+        incorr_net_aux = [col[col < 100000] for col in incorr_net_aux.T]
+
+        plt.scatter(10 ** corr_net_aux[4], 10 ** corr_net_aux[5], label="Correct network")
+        plt.scatter(10 ** incorr_net_aux[4], 10 ** incorr_net_aux[5], label="Incorrect network")
+        plt.legend()
+        plt.xlabel("birth t1")
+        plt.ylabel("birth t2")
+        plt.savefig(fname=f'{prefix}_net_comp_birth_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter(10 ** corr_net_aux[6], 10 ** corr_net_aux[7], label="Correct network")
+        plt.scatter(10 ** incorr_net_aux[6], 10 ** incorr_net_aux[7], label="Incorrect network")
+        plt.legend()
+        plt.xlabel("death t1")
+        plt.ylabel("death t2")
+        plt.savefig(fname=f'{prefix}_net_comp_death_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        props_index =  (network_labels == true_cat_labels) & (true_cat_labels == 1)
+        incorr_net_props_index =  (network_labels != true_cat_labels) & (true_cat_labels == 1)  & (LRT_labels != -1)
+        corr_net_props = true_aux[props_index].T
+        incorr_net_props = true_aux[incorr_net_props_index].T
+        plt.scatter(corr_net_props[9], corr_net_props[8], label="Correct net")
+        plt.scatter(incorr_net_props[9], incorr_net_props[8], label="Incorrect net")
+        plt.legend()
+        plt.xlabel(f'Proportion of majority state tree nodes')
+        plt.ylabel(f'index')
+        plt.savefig(fname=f'{prefix}_net_comp_prop_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        fig, (ax) = plt.subplots(nrows=1, ncols=2, figsize=(8, 8)) # -1
+        ax =ax.flatten()
+        fig.tight_layout()
+        ax[0].violinplot(corr_net_props[9]) 
+        ax[1].violinplot(incorr_net_props[9])
+        ax[0].set_title("Good \nprops\nnet")
+        ax[1].set_title("Bad\nprops\nnet")
+        plt.savefig(fname=f'{prefix}_net_props_violin.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        fig, (ax) = plt.subplots(nrows=1, ncols=2, figsize=(8, 8)) # -1
+        ax =ax.flatten()
+        fig.tight_layout()
+        ax[0].hist(corr_net_props[9]) 
+        ax[1].hist(incorr_net_props[9])
+        ylim = [0,30]
+        ax[0].set_ylim(ylim)
+        ax[1].set_ylim(ylim)
+        ax[0].set_title("Proportion of states\n for correct predictions:\nnetwork")
+        ax[1].set_title("Proportion of states\n for incorrect predictions:\nnetwork")
+        plt.savefig(fname=f'{prefix}_net_props_hist.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+
+
+        plt.scatter((10 ** (corr_net_aux[4]) - 10 ** corr_net_aux[6]), (10 ** (corr_net_aux[5]) - 10 ** corr_net_aux[7]), label="Correct network")
+        plt.scatter((10 ** (incorr_net_aux[4]) - 10 ** incorr_net_aux[6]), (10 ** (incorr_net_aux[5]) - 10 ** incorr_net_aux[7]), label="Incorrect network")
+        plt.legend()
+        plt.xlabel(f'div t1')
+        plt.ylabel(f'div t2')
+        plt.savefig(fname=f'{prefix}_net_comp_div_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter((10 ** (corr_net_aux[4]) + 10 ** corr_net_aux[6])/20, (10 ** (corr_net_aux[5]) + 10 ** corr_net_aux[7])/20, label="Correct network")
+        plt.scatter((10 ** (incorr_net_aux[4]) + 10 ** incorr_net_aux[6])/20, (10 ** (incorr_net_aux[5]) + 10 ** incorr_net_aux[7])/20, label="Incorrect network")
+        plt.legend()
+        plt.xlabel(f'q0 (lambda avg.)')
+        plt.ylabel(f'mu avg.')
+        plt.savefig(fname=f'{prefix}_net_comp_q0_BiSSE.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+
+        plt.scatter(10 ** corr_net_aux[2], 10 ** corr_net_aux[3], label="Correct network")
+        plt.scatter(10 ** incorr_net_aux[2], 10 ** incorr_net_aux[3], label="Incorrect network")
+        plt.legend()
+        plt.xlabel(f'birth')
+        plt.ylabel(f'death')
+        plt.savefig(fname=f'{prefix}_net_comp_birth_death_BD.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        # LRT vs network
+        agree = network_labels == LRT_labels
+        disagree = ~agree
+        agree_labels = LRT_labels[agree]
+        disagree_net_labels = network_labels[disagree]
+        disagree_LRT_labels = LRT_labels[disagree]
+        agree_true = true_cat_labels[agree]
+        disagree_true = true_cat_labels[agree]
+        agree_aux = true_aux[agree]
+        disagree_aux = true_aux[disagree]
+        agree_aux = [col[col < 100000] for col in agree_aux.T] 
+        disagree_aux = [col[col < 100000] for col in disagree_aux.T]
+
+        plt.scatter((10 ** (agree_aux[4]) - 10 ** agree_aux[6]), (10 ** (agree_aux[5]) - 10 ** agree_aux[7]), label="Preds agree")
+        plt.scatter((10 ** (disagree_aux[4]) - 10 ** disagree_aux[6]), (10 ** (disagree_aux[5]) - 10 ** disagree_aux[7]), label="Preds disagree")
+        plt.legend()
+        plt.xlabel(f'div t1')
+        plt.ylabel(f'div t2')
+        plt.savefig(fname=f'{prefix}_comp_LRT_and_net_div.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter((10 ** (agree_aux[4]) + 10 ** agree_aux[6])/20, (10 ** (agree_aux[5]) + 10 ** agree_aux[7])/20, label="Preds agree")
+        plt.scatter((10 ** (disagree_aux[4]) + 10 ** disagree_aux[6])/20, (10 ** (disagree_aux[5]) + 10 ** disagree_aux[7])/20, label="Preds disagree")
+        plt.legend()
+        plt.xlabel(f'q0 (lambda avg.)')
+        plt.ylabel(f'mu avg.')
+        plt.savefig(fname=f'{prefix}_comp_LRT_and_net_q.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+        plt.scatter(10 ** agree_aux[2], 10 ** agree_aux[3], label="Preds agree")
+        plt.scatter(10 ** disagree_aux[2], 10 ** disagree_aux[3], label="Preds disagree")
+        plt.legend()
+        plt.xlabel(f'birth')
+        plt.ylabel(f'death')
+        plt.savefig(fname=f'{prefix}_comp_LRT_and_net_BD.pdf', format='pdf', dpi=300,
+                        bbox_inches='tight')
+        plt.clf()
+        plt.close()
         
+
+
+
+
+        LRT_vs_network = confusion_matrix(network_labels, LRT_labels)
+        
+        fig, ax = plt.subplots(figsize=(6, 6))
+        fig.tight_layout()
+        cm = LinearSegmentedColormap.from_list(
+            "Custom", ['white', self.plot_aux_color], N=20)
+        cax = ax.matshow(LRT_vs_network, cmap=cm, vmin=0.0, vmax=np.max(LRT_vs_network))
+        for (i, j), z in np.ndenumerate(LRT_vs_network):
+            text_color = 'black'
+            if z > np.max(LRT_vs_network)/2:
+                text_color = 'white'
+            ax.text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
+                    color=text_color)
+        ax.xaxis.set_ticks_position('bottom')
+
+        plt.xlabel(f'LRT')
+        plt.ylabel(f'network')
+        plt.savefig(fname=f'{prefix}_LRT_net_CM.pdf', format='pdf', dpi=300,
+                    bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+
+
         return
 
     def make_plot_stat_density(self, dataset_name, dataset_type):
@@ -700,68 +1046,72 @@ class Plotter:
             #for b in range(len(bins)):
             
             if isinstance(aux, pd.DataFrame):
-                for col in range(aux.shape[1]):
-                    bins=np.linspace(np.min(aux.iloc[:,col]), np.max(aux.iloc[:,col]), 11)
-                    binned_aux = np.empty(aux.shape[0]).astype(int)
-                    for index, row in aux.iterrows():
-                        b = 1
-                        while bins[b] < row.iloc[col]:
-                            b = b + 1
-                        binned_aux[index] = b
-                    binned_aux = binned_aux.astype(int)
+                print("aux.shape", aux.shape)
+                print(self.test_lbl_data_names)
+                for col in range(aux.shape[1] - len(self.test_lbl_data_names)):
+                        print("col = ", col)
+                        bins=np.linspace(np.min(aux.iloc[:,col]), np.max(aux.iloc[:,col]), 11)
+                        binned_aux = np.empty(aux.shape[0]).astype(int)
+                        for index, row in aux.iterrows():
+                            b = 1
+                            while bins[b] < row.iloc[col]:
+                                b = b + 1
+                            binned_aux[index] = b
+                        binned_aux = binned_aux.astype(int)
 
-                    fig, ax = plt.subplots(3,math.ceil(len(np.unique(binned_aux))/3),figsize=(7, 7))
-                    ax =ax.flatten()
-                    binned_matrices = []
-                    for b in range(np.min(binned_aux), np.max(binned_aux)+1):
-                        sel_labels = labels[binned_aux == b]
-                        sel_ests = ests[binned_aux == b]
-                        binned_matrices.append(confusion_matrix(sel_labels, sel_ests))
-                    
-                    plt.rcParams.update({'font.size': 5})
-                    for b, matrix in enumerate(binned_matrices):
-                        cm = LinearSegmentedColormap.from_list(
-                        "Custom", ['white', color], N=20)
-                        cax = ax[b].matshow(matrix, cmap=cm, vmin=0.0, vmax=np.max(matrix))
-                        for (i, j), z in np.ndenumerate(matrix):
-                            text_color = 'black'
-                            if z > np.max(matrix)/2:
-                                text_color = 'white'
-                            ax[b].text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
-                                    color=text_color)
-                        ax[b].xaxis.set_ticks_position('bottom')
-                        cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
-                        # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
-                        # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
+                        fig, ax = plt.subplots(3,math.ceil(len(np.unique(binned_aux))/3),figsize=(7, 7))
+                        ax =ax.flatten()
+                        binned_matrices = []
+                        for b in range(np.min(binned_aux), np.max(binned_aux)+1):
+                            sel_labels = labels[binned_aux == b]
+                            sel_ests = ests[binned_aux == b]
+                            if len(sel_labels) > 0 and len(sel_labels) > 0:
+                                binned_matrices.append(confusion_matrix(sel_labels, sel_ests))
+                        
+                        plt.rcParams.update({'font.size': 5})
+                        for b, matrix in enumerate(binned_matrices):
+                            cm = LinearSegmentedColormap.from_list(
+                            "Custom", ['white', color], N=20)
+                            cax = ax[b].matshow(matrix, cmap=cm, vmin=0.0, vmax=np.max(matrix))
+                            for (i, j), z in np.ndenumerate(matrix):
+                                text_color = 'black'
+                                if z > np.max(matrix)/2:
+                                    text_color = 'white'
+                                ax[b].text(j, i, '{:0.2f}'.format(z), ha='center', va='center',
+                                        color=text_color)
+                            ax[b].xaxis.set_ticks_position('bottom')
+                            cbar = plt.colorbar(cax, fraction=0.046, pad=0.04)
+                            # plt.text(x=0,y=0,s=f'False Positive Rate: {s_fpr}', ha='right', va='top', fontsize=10)
+                            # plt.text(x=0,y=0,s=f'True Positive Rate: {s_tpr}', ha='right', va='bottom', fontsize=10)
 
-                        if self.num_classes == 4:
-                            ax[b].set_xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
-                        if self.num_classes == 2:
-                            ax[b].set_xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
-                        if b % 4 == 0:
-                            ax[b].set_xlabel(f'{p} estimate')
-                        else:
-                            ax[b].set_xticks([])
-                            ax[b].set_xlabel("")
-                        if self.num_classes == 4:
-                            ax[b].set_yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
-                        if self.num_classes == 2:
-                            ax[b].set_yticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
-                        if b == 0:
-                            ax[b].set_ylabel(f'{p} truth')
-                        else:
-                            ax[b].set_ylabel("")
+                            if self.num_classes == 4:
+                                ax[b].set_xticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                            if self.num_classes == 2:
+                                ax[b].set_xticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                            if b % 4 == 0:
+                                ax[b].set_xlabel(f'{p} estimate')
+                            else:
+                                ax[b].set_xticks([])
+                                ax[b].set_xlabel("")
+                            if self.num_classes == 4:
+                                ax[b].set_yticks(ticks=[0,1, 2, 3], labels=["BD", "BiSSE", "skyBD", "skyBiSSE"], fontsize=5)
+                            if self.num_classes == 2:
+                                ax[b].set_yticks(ticks=[0,1], labels=["BD", "BiSSE"], fontsize=5)
+                            if b == 0:
+                                ax[b].set_ylabel(f'{p} truth')
+                            else:
+                                ax[b].set_ylabel("")
 
 
-                        ax[b].set_title(f'quantile {b/10}')
-                    for plot_ind in range(len(binned_matrices), len(ax)):
-                        ax[plot_ind].axis('off')
-                    plt.suptitle(aux.columns[col], fontsize=15)
-                    plt.savefig(fname=f'{prefix}_{p}_per_cat_binned_{aux.columns[col]}.pdf', format='pdf', dpi=300,
-                                    bbox_inches='tight')
-                    plt.clf()
-                    plt.close()
-                    plt.rcParams.update({'font.size': 12})
+                            ax[b].set_title(f'quantile {b/10}')
+                        for plot_ind in range(len(binned_matrices), len(ax)):
+                            ax[plot_ind].axis('off')
+                        plt.suptitle(aux.columns[col], fontsize=15)
+                        plt.savefig(fname=f'{prefix}_{p}_per_cat_binned_{aux.columns[col]}.pdf', format='pdf', dpi=300,
+                                        bbox_inches='tight')
+                        plt.clf()
+                        plt.close()
+                        plt.rcParams.update({'font.size': 12})
                 
                         
 
@@ -1760,37 +2110,38 @@ class Plotter:
 
         # auxiliary data
         for name, aux in test_train_aux:
-            for col in aux:
-                # get stats
-                df.loc[len(df)] = [name, 'true', 'aux_data', 'mean', col, np.mean(aux[col])]
-                df.loc[len(df)] = [name, 'true', 'aux_data', 'var', col, np.var(aux[col])]
-                df.loc[len(df)] = [name, 'true', 'aux_data', 'lower95', col,
-                                   np.quantile(aux[col], 0.025)]
-                df.loc[len(df)] = [name, 'true', 'aux_data', 'upper95', col,
-                                   np.quantile(aux[col], 0.975)]
-                
+            if aux is not None:
+                for col in aux:
+                    # get stats
+                    df.loc[len(df)] = [name, 'true', 'aux_data', 'mean', col, np.mean(aux[col])]
+                    df.loc[len(df)] = [name, 'true', 'aux_data', 'var', col, np.var(aux[col])]
+                    df.loc[len(df)] = [name, 'true', 'aux_data', 'lower95', col,
+                                    np.quantile(aux[col], 0.025)]
+                    df.loc[len(df)] = [name, 'true', 'aux_data', 'upper95', col,
+                                    np.quantile(aux[col], 0.975)]
+                    
 
-        # # empirical data
-        # for name, aux in emp_aux:
-        #     for col in aux:
-        #         # get stats
-        #         df.loc[len(df)] = [name, 'true', 'aux_data', 'mean', col, np.mean(aux[col])]
-        #         df.loc[len(df)] = [name, 'true', 'aux_data', 'var', col, np.var(aux[col])]
-        #         df.loc[len(df)] = [name, 'true', 'aux_data', 'lower95', col,
-        #                            np.quantile(aux[col], 0.025)]
-        #         df.loc[len(df)] = [name, 'true', 'aux_data', 'upper95', col,
-        #                            np.quantile(aux[col], 0.975)]
-        #         
-        # # empirical labels
-        # for name, lbl in emp_lbl:
-        #     for col in lbl:
-        #         # get stats
-        #         df.loc[len(df)] = [name, 'true', 'label', 'mean', col, np.mean(lbl[col])]
-        #         df.loc[len(df)] = [name, 'true', 'label', 'var', col, np.var(lbl[col])]
-        #         df.loc[len(df)] = [name, 'true', 'label', 'lower95', col,
-        #                            np.quantile(lbl[col], 0.025)]
-        #         df.loc[len(df)] = [name, 'true', 'label', 'upper95', col,
-        #                            np.quantile(lbl[col], 0.975)]
+            # # empirical data
+            # for name, aux in emp_aux:
+            #     for col in aux:
+            #         # get stats
+            #         df.loc[len(df)] = [name, 'true', 'aux_data', 'mean', col, np.mean(aux[col])]
+            #         df.loc[len(df)] = [name, 'true', 'aux_data', 'var', col, np.var(aux[col])]
+            #         df.loc[len(df)] = [name, 'true', 'aux_data', 'lower95', col,
+            #                            np.quantile(aux[col], 0.025)]
+            #         df.loc[len(df)] = [name, 'true', 'aux_data', 'upper95', col,
+            #                            np.quantile(aux[col], 0.975)]
+            #         
+            # # empirical labels
+            # for name, lbl in emp_lbl:
+            #     for col in lbl:
+            #         # get stats
+            #         df.loc[len(df)] = [name, 'true', 'label', 'mean', col, np.mean(lbl[col])]
+            #         df.loc[len(df)] = [name, 'true', 'label', 'var', col, np.var(lbl[col])]
+            #         df.loc[len(df)] = [name, 'true', 'label', 'lower95', col,
+            #                            np.quantile(lbl[col], 0.025)]
+            #         df.loc[len(df)] = [name, 'true', 'label', 'upper95', col,
+            #                            np.quantile(lbl[col], 0.975)]
 
         # save results
         df.to_csv(self.save_report_fn, index=False,

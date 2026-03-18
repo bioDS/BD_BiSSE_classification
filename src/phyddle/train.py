@@ -33,7 +33,7 @@ from torch_geometric.data import Batch
 from torch_geometric.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
-
+from torch import linalg as LA
 
 torch.cuda.empty_cache()
 torch.cuda.set_per_process_memory_fraction(0.8, device=0)
@@ -159,6 +159,7 @@ class Trainer:
         self.activation_func    = str(args['activation_func'])
         self.optimizer          = str(args['optimizer'])
         self.phy_hidden_size    = int(args['phy_hidden_size'])
+        self.regularisation = str(args['regularisation'])
         # initialized later
         self.phy_tensors        = dict()   # init with encode_all()
         self.train_dataset      = None     # init with load_input()
@@ -328,7 +329,7 @@ class CnnTrainer(Trainer):
         self.has_label_num = False
         self.ignore_label_num = True
 
-        self.scheduler="NA"
+        self.scheduler="manual"
         
         return
     
@@ -444,7 +445,7 @@ class CnnTrainer(Trainer):
             full_labels         = pd.DataFrame(hdf5_file['labels']).to_numpy()
             full_node_1_data = pd.DataFrame(hdf5_file['node_1'])#.to_numpy()
             full_node_2_data = pd.DataFrame(hdf5_file['node_2'])#.to_numpy()
-            full_nodes_dist = pd.DataFrame(hdf5_file['nodes_dist']).to_numpy()
+            full_nodes_attr = pd.DataFrame(hdf5_file['node_attr']).to_numpy()
             full_graph_ids = pd.DataFrame(hdf5_file['graph_id']).to_numpy()
             full_num_edges = pd.DataFrame(hdf5_file['num_edges']).to_numpy()
             full_num_nodes = pd.DataFrame(hdf5_file['num_nodes']).to_numpy()
@@ -460,7 +461,12 @@ class CnnTrainer(Trainer):
        
         #full_node_attributes = full_node_attributes[0]
        
-        full_node_attributes = full_nodes_dist.flatten()
+        print("attr")
+        print(full_nodes_attr)
+        print(full_nodes_attr.shape)
+        # full_node_attributes = full_nodes_attr.flatten()
+        # print("attributes")
+        # print(full_node_attributes)
         #full_node_attributes = [([[np.diag(y) for y in x]  for x in full_nodes_dist ])]
 
         # separate labels for categorical param_est targets
@@ -499,12 +505,14 @@ class CnnTrainer(Trainer):
         cumulative_nodes = np.insert(np.cumsum(full_num_nodes, dtype=np.int64), 0, 0)
         # print("cumulative edges")
         # print(cumulative_edges)
-        # print("cumulative nodes")
-        # print(cumulative_nodes)
+        print("cumulative nodes")
+        print(cumulative_nodes)
         split_edges = np.split(full_edges_matrix, cumulative_edges[1:])
 
         joined_edges = np.concatenate([split_edges[x] for x in randomized_idx])
-        split_nodes = np.split(full_node_attributes, cumulative_nodes[1:])
+        split_nodes = np.split(full_nodes_attr, cumulative_nodes[1:])
+        # print("split nodes")
+        # print(split_nodes)
         print("length split nodes")
         print(len(split_nodes))
         joined_nodes = np.concatenate([split_nodes[x] for x in randomized_idx])
@@ -512,10 +520,14 @@ class CnnTrainer(Trainer):
         print(np.sum(full_num_nodes).astype(np.int64))
         print(np.sum(full_num_nodes, dtype=np.int64))
 
+        print("randomized idx", randomized_idx)
+
         full_num_nodes = full_num_nodes[randomized_idx]
         full_num_edges = full_num_edges[randomized_idx]
         full_phy_data      = full_phy_data[randomized_idx,:]
-        full_node_attributes = joined_nodes
+        full_node_attributes = joined_nodes #full_nodes_attr[randomized_idx,:]
+        print("shuffled:")
+        print(full_node_attributes)
         full_edges_matrix = joined_edges
         full_aux_data      = full_aux_data[randomized_idx,:]
         full_labels_num    = full_labels_num[randomized_idx,:]
@@ -557,10 +569,15 @@ class CnnTrainer(Trainer):
         norm_calib_aux_data = util.normalize(full_aux_data[calib_idx,:],
                                              self.train_aux_data_mean_sd)
         
-        
-        #norm_train_node_attributes = util.normalize(full_node_attributes[train_idx])
-        #norm_val_node_attributes = util.normalize(full_node_attributes[val_idx])
-        #norm_calib_node_attributes = util.normalize(full_node_attributes[calib_idx])
+        # print("training data:")
+        # print(full_node_attributes[train_idx])
+        # print(full_node_attributes[train_idx].shape)
+        # # norm_train_node_attributes = util.normalize(full_node_attributes[train_idx])[0]
+        # # norm_val_node_attributes = util.normalize(full_node_attributes[val_idx])[0]
+        # # norm_calib_node_attributes = util.normalize(full_node_attributes[calib_idx])[0]
+        # print("normalized training data:")
+        # print(norm_train_node_attributes)
+        # print(norm_train_node_attributes.shape)
 
         # normalize labels
         norm_train_labels_num, train_labels_num_means, train_labels_num_sd = util.normalize(full_labels_num[train_idx,:])
@@ -575,14 +592,21 @@ class CnnTrainer(Trainer):
         val_phy_data_tensor = full_phy_data[val_idx,:,:]
         self.calib_phy_data_tensor = full_phy_data[calib_idx,:,:]
         
-        self.num_node_features = 1
+        self.num_node_features = 3
+
+        train_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx]))[0]))
+        val_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx]))[0]))
+        calib_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx]))[0]))
+        print("train tensor:")
+        print(train_node_attr_tensor)
 
         # train_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in train_idx]
         # val_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in val_idx]
         # calib_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in calib_idx]
-        train_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx])
-        val_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx])
-        calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
+        
+        # train_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx])
+        # val_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx])
+        # calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
 
 
 
@@ -807,6 +831,7 @@ class CnnTrainer(Trainer):
         #val_graph_dat = self.val_dataset.graph_dat.to(self.TORCH_DEVICE)
         val_graph_dat = [self.val_dataset.graph_dat[i].to(self.TORCH_DEVICE) for i in range(len(self.val_dataset.graph_dat))]
         val_bad_count = 0
+        val_cycle_good_count = 0
 
         #print("val_node_data")
         #print(self.val_dataset.node_data)
@@ -886,7 +911,16 @@ class CnnTrainer(Trainer):
             for var_name in optimizer.state_dict():
                 print(var_name, "\t", optimizer.state_dict()[var_name])
 
+
+        learning_rate = self.learning_rate
+        old_learning_rate = learning_rate
         for i in range(self.num_epochs):
+
+            if old_learning_rate != learning_rate:
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = learning_rate  
+                print("changing learning rate to:", learning_rate)
+            old_learning_rate = learning_rate
             # print('-----')
             trn_loss_value = 0.
             trn_loss_lower = 0.
@@ -923,12 +957,12 @@ class CnnTrainer(Trainer):
 
 #             for j, (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
 
+
             for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
                                                                     total=num_batches,
                                                                     desc=train_msg,
                                                                     smoothing=0):
-                                            
-                    
+                
                     # short cut batches for training
                     # if j > 1:
                     #     break
@@ -939,6 +973,9 @@ class CnnTrainer(Trainer):
                     # send labels to device
                     #phy_dat = phy_dat.to(self.TORCH_DEVICE)
                     #aux_dat = aux_dat.to(self.TORCH_DEVICE)
+                # print("type of graph dat")
+                # print(type(graph_dat))
+
                 for g in graph_dat:
                     if (g.x.shape[0] != g.edge_index.shape[1] + 1):
                         print(g)
@@ -1030,6 +1067,22 @@ class CnnTrainer(Trainer):
                         loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
                     elif loss_aggregation == 'median':
                         loss_combined = torch.median(torch.stack(loss_list))
+                    
+                    #https://www.geeksforgeeks.org/machine-learning/l1l2-regularization-in-pytorch/
+
+                    if self.regularisation == "L1" or self.regularisation == "L1L2":
+                        l1_lambda = 1e-5
+                        l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
+                        l1_norm = sum(p.abs().sum() for p in self.model.parameters()).item()
+                        # print("loss combined", loss_combined, " l1 norm", l1_norm)
+                        loss_combined = loss_combined + l1_lambda*l1_norm
+                    # https://stackoverflow.com/questions/42704283/l1-l2-regularization-in-pytorch
+                    if self.regularisation == "L2" or self.regularisation == "L1L2":
+                        l2_lambda = 1e-4
+                        l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
+                        loss_combined = loss_combined + l2_lambda*l2_norm
+                        
+
                     # collect history stats
                     if self.has_label_num:
                         trn_loss_value    += loss_value.item() / num_batches
@@ -1043,10 +1096,10 @@ class CnnTrainer(Trainer):
                 
                 # backward pass to update gradients
                 #loss_combined.requires_grad = True #KT
+
                 
                 loss_combined.backward()
 
-                # self.model.train()
                 # update network parameters
                 if ((j + 1) % accumulation_steps == 0 or (j + 1) == num_batches):
                     #print("updating optimizer")
@@ -1054,6 +1107,9 @@ class CnnTrainer(Trainer):
 
                     # reset gradients for tensors
                     optimizer.zero_grad()
+
+                # self.model.train()
+
             #scheduler.step()
             #print(scheduler.get_last_lr())
             
@@ -1082,7 +1138,10 @@ class CnnTrainer(Trainer):
                                                                     total=val_num_batches,
                                                                     desc=train_msg,
                                                                     smoothing=0):
-                    
+                        
+                        # print("val graph dat:")
+                        # print(val_graph_dat)
+               
                     #val_phy_dat = val_phy_dat.to(self.TORCH_DEVICE)
                     #val_aux_dat = val_aux_dat.to(self.TORCH_DEVICE)
                         val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
@@ -1165,7 +1224,13 @@ class CnnTrainer(Trainer):
                         elif loss_aggregation == 'median':
                             # val_loss_combined = torch.median(torch.stack(val_loss_list))
                             val_loss_combined = np.median(val_loss_list)
-                            
+                        l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
+                        l1_lambda = 1e-5
+                        for p in self.model.parameters():
+                            l1_norm += p.abs().sum()
+                        l1_norm = l1_norm.item()
+                        val_loss_combined = val_loss_combined + l1_lambda*l1_norm
+
                         val_mse_value = 0.
                         val_mae_value = 0.
                         val_mape_value = 0.
@@ -1244,8 +1309,21 @@ class CnnTrainer(Trainer):
 
                     if diff_val_loss >= 0:
                         val_bad_count += 1
+                        # if learning_rate > 0.00005 and i > 5 and val_cycle_good_count != 0:
+                        #     learning_rate = learning_rate / 1.25
+                        val_cycle_good_count = 0
                     else:
                         val_bad_count = 0
+                        val_cycle_good_count += 1
+                        # if val_cycle_good_count == 3:
+                        #     learning_rate = learning_rate * 1.25
+                        #     val_cycle_good_count = 0
+
+                if i >= 15:
+                    if (val_bad_count - 2) % 3 == 0:
+                        learning_rate = learning_rate / 1.25
+                    if val_cycle_good_count != 0 and val_cycle_good_count % 5 == 0:
+                        learning_rate = learning_rate * 1.25
 
                 prev_trn_loss_combined = trn_loss_combined
                 prev_val_loss_combined = val_loss_combined
@@ -1257,12 +1335,14 @@ class CnnTrainer(Trainer):
                 print("")
                 print(val_loss_str, val_acc_str)
                 print('')
+                # update network parameters
+
 
             # update train history log
             self.update_train_history(i, metric_names, train_metric_vals, 'train')
             self.update_train_history(i, metric_names, val_metric_vals, 'validation')
             path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
-            model_history_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
+            model_history_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
             self.train_history.to_csv(model_history_fn, index=False, sep=',',
                                   float_format=util.PANDAS_FLOAT_FMT_STR)
 
@@ -1380,7 +1460,8 @@ class CnnTrainer(Trainer):
         for j, (train_graph_dat, train_idx_dat, train_labels_num, train_labels_cat) in enumerate(train_loader):
             # print("j = ", j)
 
-            
+            # get train estimates
+
             #train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
             #train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
             train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
@@ -1491,21 +1572,21 @@ class CnnTrainer(Trainer):
         path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
         
         # output network model info
-        model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.trained_model.pkl'
-        model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_history.csv'
-        model_cpi_fn                 = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.cpi_adjustments.csv'
+        model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
+        model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
+        model_cpi_fn                 = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.cpi_adjustments.csv'
         # model_weights_fn           = f'{path_prefix}.train_weights.hdf5'
         
         # output scaling terms
-        train_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.labels_num.csv'
-        train_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_norm.aux_data.csv'
+        train_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_norm.labels_num.csv'
+        train_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_norm.aux_data.csv'
 
         # output training labels
-        train_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_num.csv'
-        train_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num.csv'
-        train_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_num_nocalib.csv'
-        train_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_true.labels_cat.csv'
-        train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.train_est.labels_cat.csv'
+        train_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_num.csv'
+        train_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num.csv'
+        train_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num_nocalib.csv'
+        train_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_cat.csv'
+        train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_cat.csv'
         
         # save model to file
         torch.save(self.model.module, model_arch_fn)

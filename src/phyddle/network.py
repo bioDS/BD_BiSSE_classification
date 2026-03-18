@@ -66,8 +66,8 @@ class GCN_PhyloPool(torch.nn.Module):
         torch.manual_seed(12345)
         self.n_parts = 10
         ker_size = 5
-        self.gconv1 = GraphConv(num_node_features, hidden_channels) #GCNConv
-        self.gconv2 = GraphConv(hidden_channels, hidden_channels)
+        self.gconv1 = GCNConv(num_node_features, hidden_channels) #GCNConv
+        self.gconv2 = GCNConv(hidden_channels, hidden_channels)
         self.conv1 = nn.Conv1d(hidden_channels, 2*hidden_channels, kernel_size=ker_size)
         self.conv2= nn.Conv1d(2*hidden_channels, 4*hidden_channels, kernel_size=ker_size)
         self.conv3= nn.Conv1d(4*hidden_channels, 8*hidden_channels, kernel_size=ker_size)
@@ -264,7 +264,9 @@ class Dataset(Geoset):
         self.len         = len(self.labels_num) #self.labels_num.shape[0]
 
         edges_data = torch.from_numpy(edges_data.astype('int'))
-        print("initial edges shape", edges_data.shape)
+        if (isinstance(node_data, np.ndarray)):
+            node_data = torch.from_numpy(np.transpose(node_data.astype('float32')))
+
         min_index =   edges_data.min()
         edges_data = torch.sub(edges_data, min_index)
         unique = torch.unique(edges_data)
@@ -272,7 +274,6 @@ class Dataset(Geoset):
         difference = all[torch.isin(all, unique, invert=True)]
         reduction = torch.searchsorted(difference, all, right=False)
         edges_data=  torch.sub(edges_data, reduction[edges_data])
-        #self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
         self.graph_dat = []
         self.id_list = graph_ids
         i = 0
@@ -284,17 +285,27 @@ class Dataset(Geoset):
             quit()
         prev_edge_ind = 0
         prev_node_ind = 0
-        # print("edges:")
-        # print(edges_data)
-        # print(edges_data.shape)
+        print("edges:")
+        print(edges_data.shape)
+        print("node data:")
+        print(node_data.shape)
+
         for i in range(len(graph_ids)):
             current_edge_ind = prev_edge_ind + num_edges[i].astype(np.int64)[0]
             current_node_ind = prev_node_ind + num_nodes[i].astype(np.int64)[0]
 
-            selected_nodes = node_data[prev_node_ind:current_node_ind]
+            selected_nodes = node_data[:,prev_node_ind:current_node_ind]
+            # print("selected node shape")
+            # print(selected_nodes.shape)
+            # print("prev ind", prev_node_ind, "current ind", current_node_ind)
+            # print("i = ", i, "selected attr", selected_nodes)
             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
         
-            if (selected_nodes.shape[0] != selected_edges.shape[1] + 1):
+            # print("node shape")
+            # print(selected_nodes.shape)
+            # print("edge shape")
+            # print(selected_edges.shape)
+            if (selected_nodes.shape[1] != selected_edges.shape[1] + 1):
                 print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
 
                 print("MISMATCH!!!!")
@@ -306,14 +317,16 @@ class Dataset(Geoset):
                 print("total num nodes", np.sum(num_nodes, dtype=np.int64))
                 print("total num edges", np.sum(num_edges, dtype=np.int64))
                 print(graph_ids[i])
-                print("total length node data", len(node_data))
+                print("total length node data", len(node_data[1]))
                 print("total length edge data", len(edges_data[1]))
                 print("current node index:", current_node_ind, "current edge index", current_edge_ind)
                 print("total number of graph ids:", len(graph_ids))
                 print("total number of num_edges:", len(num_edges))
                 print("total number of num nodes:", len(num_nodes))
                 quit()
-            self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+            #self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+            self.graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+
             prev_edge_ind = current_edge_ind
             prev_node_ind = current_node_ind
         # print("self graph dat")
@@ -598,13 +611,13 @@ class ParameterEstimationNetwork(nn.Module):
             #print("data.edge_index")
             #print(graph_dat.edge_index)
 
-            norm_features = (graph_dat.x - 0.5)*2
+            # norm_features = (graph_dat.x - 0.5)*2 # might need this back
             # print("norm features")
             # print(norm_features.flatten())
             # print(norm_features.shape)
             # print(graph_dat.edge_index.shape)
             # print(graph_dat.batch.shape)
-            x_concat = self.phy_std(norm_features, graph_dat.edge_index, graph_dat.batch)
+            x_concat = self.phy_std(graph_dat.x, graph_dat.edge_index, graph_dat.batch)
             x_point = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_lower = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
             x_upper = torch.empty((num_sample,0), device=self.TORCH_DEVICE)
@@ -705,37 +718,18 @@ class CrossEntropyLoss(nn.Module):
         weights = 1 / torch.bincount(targets).float()
         # print("weights:", weights)
         weight_tensor = targets.clone().float()
+        
         if len(weight_tensor) < 2 or min(weight_tensor) == 0: #< 4
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
         else:
             weight_tensor[weight_tensor == 0] = weights[0]
             weight_tensor[weight_tensor == 1] = weights[1]
-            weight_tensor[weight_tensor == 2] = weights[2]
-            weight_tensor[weight_tensor == 3] = weights[3]
+            # weight_tensor[weight_tensor == 2] = weights[2]
+            # weight_tensor[weight_tensor == 3] = weights[3]
         #targets = targets.float()
             weight_tensor = weight_tensor.flatten().unsqueeze(1)   
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
-        #print("predictions *******")
-        ##predictions = predictions.flatten().unsqueeze(1) # needed for bcewithlogitloss
-        #print(predictions)
-        #print("targets")
         targets  = targets.unsqueeze(1)
-        #print(targets.flatten())
         loss_list = [loss_func(predictions, targets.flatten())]  
-
-        #loss_func = torch.nn.BCEWithLogitsLoss(reduction = 'mean', weight=weight_tensor) #weight=weights
-        #predictions = predictions.flatten().unsqueeze(1) # needed for bcewithlogitloss
-        #targets  = targets.unsqueeze(1)
-        #loss_list = [loss_func(predictions, targets)]  
-
-        # assumes that order of entries in predictions
-        # matches order of entries in targets; could be unsafe
-        #for i,(k,v) in enumerate(predictions.items()):
-           #loss_list.append(loss_func(v, targets[:,i]))
-        
-        # print("list")
-        # print(loss_list)
-
-
         return torch.sum(torch.stack(loss_list))
 

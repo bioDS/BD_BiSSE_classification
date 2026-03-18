@@ -201,6 +201,7 @@ def settings_registry():
         'load_model':     {'step': 'T',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Save model for checkpointing', 'bool': True},
         'phylo_pool':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use phylo pooling instead of average pooling', 'bool': True},
         'graph_conv':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use GraphConv instead of GCNConv', 'bool': True},
+        'regularisation': {'step': 'TEP', 'type':str, 'section':'Train', 'default':'NA', 'help':'Apply L1 or L2 regularisation'},
 
 
 

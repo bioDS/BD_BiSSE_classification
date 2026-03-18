@@ -421,13 +421,14 @@ class Formatter:
                 self.rep_data[i[0]] = { 'phy':i[1].flatten(),
                                         'node_1':i[3],
                                         'node_2':i[4],
-                                        'nodes_dist':i[2],
+                                        'node_attr':i[2],
                                         'num_edges':i[5],
                                         'num_nodes':i[6],
                                         'aux': i[7],
                                         'lbl': i[8]}
 
-                if i[6] != len(i[2]):
+                if i[6] != i[2].shape[1]:
+                    print(i[2].shape)
                     print("MISSMATCH!")
                     quit()
 
@@ -589,72 +590,39 @@ class Formatter:
 
         
         # store all numerical data into hdf5)
-        #node_1_list = np.concenate([np.array(x['node_1'],dtype = np.float64)+len(x) for x in res])
             if len(res) > 0:
                 dist_list = [] # defaultdict(list) #np.empty(0, dtype=object)
-                # mean_edge_list = [] #np.empty(0, dtype=object)
-                # time_asym_list = []
-                # clade_asym_list = []
-                # ancestor_list = []
-                # descendant_list = []
                 node_1_list = [] # defaultdict(list)
                 node_2_list = [] # defaultdict(list)
                 graph_id_list = [] # defaultdict(list)
                 res_count = 0
                 node_inc = 0
-                # for x in res:
-                #     if (res_count % 100 == 0):
-                #         print(res_count)
-                #     node_1 = np.array(x['node_1'],dtype = np.float64)
-                #     node_2 = np.array(x['node_2'],dtype = np.float64)
-                #     nodes_dist = np.array(x['nodes_dist'], dtype = np.float64)
-                #     #mean_edge_list.append(gn[1,:])
-                    
-                #     # time_asym_list.append(gn[2,:])
-                #     # clade_asym_list.append(gn[3,:])
-                #     # ancestor_list.append(gn[4,:])
-                #     # descendant_list.append(gn[5,:])
-                #     # node_1_list[val(node_1+node_inc)].append(node_1).tolist()
-                #     node_1_list = node_1_list + (node_1).tolist()
-
-                #     node_2_list = node_2_list + (node_2).tolist()
-                #     dist_list = dist_list + (nodes_dist).tolist()
-                #     graph_id_list = graph_id_list + [res_count]*len(node_1)
-                #     #node_inc = node_inc + max(max(node_1), max(node_2))
-                #     res_count = res_count + 1
             
                 dyn = h5py.vlen_dtype(np.dtype('float64'))
                 
-                # dat_mean_edge = hdf5_file.create_dataset('mean_edge',
-                #         shape=(len(mean_edge_list),), dtype=dyn, compression='gzip')
-                # dat_time_asym = hdf5_file.create_dataset('time_asym',
-                #         shape=(len(time_asym_list),), dtype=dyn, compression='gzip')
-                # dat_clade_asym = hdf5_file.create_dataset('clade_asym',
-                #         shape=(len(clade_asym_list),), dtype=dyn, compression='gzip')
-                # dat_ancestors = hdf5_file.create_dataset('ancestor',
-                #         shape=(len(ancestor_list),), dtype=dyn, compression='gzip')
-                # dat_descendants = hdf5_file.create_dataset('descendant',
-                #         shape=(len(descendant_list),), dtype=dyn, compression='gzip')
 
-                nodes_dist_cat = np.concatenate( [(np.array(x['nodes_dist'], dtype=np.float64)) for x in res ], axis=None)
+                node_attr_cat = np.concatenate([(np.array(x['node_attr'], dtype=np.float64)) for x in res ], axis=None)
+                print("cat:")
+                print(node_attr_cat)
+                print("total nodes:")
+                total_nodes = np.sum([np.array(x['num_nodes']) for x in res])
                 node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
                 node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
                 graph_cat = np.concatenate( [[i]* len(x['node_1']) for i,x in enumerate(res,start=0) ] )
-
+                
                 dat_node_1 = hdf5_file.create_dataset('node_1',
                                             (len(node_1_cat), ),
                                             dtype='f', compression='gzip')
                 dat_node_2 = hdf5_file.create_dataset('node_2',
                                             (len(node_2_cat), ),
                                             dtype='f', compression='gzip')
-                dat_nodes_dist = hdf5_file.create_dataset('nodes_dist', 
-                    shape=(len(nodes_dist_cat),),  dtype='f', compression='gzip')
+                dat_node_attr = hdf5_file.create_dataset('node_attr', 
+                        shape=(total_nodes,3),  dtype='f', compression='gzip')
                 dat_graph_id = hdf5_file.create_dataset('graph_id', 
                     shape=(len(graph_cat),),  dtype='f', compression='gzip')
 
                 dat_phy[:,:] = np.vstack( [ x['phy'] for x in res ] )
-                #dat_nodes_dist[:] = dist_list
-                dat_nodes_dist[:] = nodes_dist_cat
+                dat_node_attr[:] = node_attr_cat.reshape(total_nodes,3, order='F')
                 #dat_graph_id[:] = graph_id_list
                 dat_node_1[:] = node_1_cat
                 dat_node_2[:] = node_2_cat
@@ -929,6 +897,9 @@ class Formatter:
         # graph_data = [list(graph_data[i]) for i in range(len(graph_data))]
         edge_data = pd.DataFrame({graph_data[1].rx2('node1'), graph_data[1].rx2('node2')})
         nodes_dist = graph_data_base[0].rx2('dist')
+        parents_dist = graph_data_base[0].rx2('dist_to_parent')
+        tip = graph_data_base[0].rx2('tip')
+        node_attr = pd.DataFrame({nodes_dist, parents_dist, tip})
         node_1 = graph_data[1].rx2('node1')
         node_2 = graph_data[1].rx2('node2')
         num_edges = max(len(node_1), len(node_2))
@@ -1003,7 +974,7 @@ class Formatter:
     
 
         # done!
-        return idx, cpvs_data, nodes_dist, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
+        return idx, cpvs_data, node_attr, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
     
     def make_summ_stat(self, phy, dat):
         """
