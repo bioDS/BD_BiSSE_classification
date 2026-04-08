@@ -617,12 +617,12 @@ class Formatter:
                                             (len(node_2_cat), ),
                                             dtype='f', compression='gzip')
                 dat_node_attr = hdf5_file.create_dataset('node_attr', 
-                        shape=(total_nodes,3),  dtype='f', compression='gzip')
+                        shape=(total_nodes,2),  dtype='f', compression='gzip')
                 dat_graph_id = hdf5_file.create_dataset('graph_id', 
                     shape=(len(graph_cat),),  dtype='f', compression='gzip')
 
                 dat_phy[:,:] = np.vstack( [ x['phy'] for x in res ] )
-                dat_node_attr[:] = node_attr_cat.reshape(total_nodes,3, order='F')
+                dat_node_attr[:] = node_attr_cat.reshape(total_nodes,2, order='F')
                 #dat_graph_id[:] = graph_id_list
                 dat_node_1[:] = node_1_cat
                 dat_node_2[:] = node_2_cat
@@ -732,21 +732,6 @@ class Formatter:
         df_idx.to_csv(out_idx_fn, index=False)
 
         return
-
-    #def get_node_df(phylo):
-    #    """Python version of function from phylo-inference-ml"""
-    #    n_taxa = len(phy.leaf_nodes())
-    #    n_nodes = 2*n_taxa + 1
-    #    dist = get_all_distances_to_root(phylo, as_edge_count = FALSE)
-    #    ancestor = get_all_distances_to_root(phylo, as_edge_count = TRUE)
-    #    for (i in 1:n_nodes):
-    #        descendat = len(
-
-  # def generate_phylo_graph(phylo):
-  #  """ Python version of function from phylo-inference-ml"""
-   #     df_edge = get_edge_df(phylo)
- #       df_node = get_node_df(phylo)
-  #      return list(df_edge, df_node)
 
     def encode_one_star(self, args):
         """Wrapper for encode_one w/ unpacked args"""
@@ -895,13 +880,22 @@ class Formatter:
 
         graph_data = gen_graph(ape.read_tree(text=phy_str), offset=0)
         # graph_data = [list(graph_data[i]) for i in range(len(graph_data))]
-        edge_data = pd.DataFrame({graph_data[1].rx2('node1'), graph_data[1].rx2('node2')})
+        #edge_data = pd.DataFrame({graph_data[1].rx2('node1'), graph_data[1].rx2('node2')})
+        n1 = pd.Series(graph_data[1].rx2('node1'))
+        n2 = pd.Series(graph_data[1].rx2('node2'))
+        node_1 = pd.concat([n1,n2], ignore_index=True)
+        node_2 = pd.concat([n2,n1], ignore_index=True)
+        edge_data = pd.DataFrame({
+            'from': node_1,
+            'to': node_2
+            })
+
         nodes_dist = graph_data_base[0].rx2('dist')
         parents_dist = graph_data_base[0].rx2('dist_to_parent')
-        tip = graph_data_base[0].rx2('tip')
-        node_attr = pd.DataFrame({nodes_dist, parents_dist, tip})
-        node_1 = graph_data[1].rx2('node1')
-        node_2 = graph_data[1].rx2('node2')
+        # tip = graph_data_base[0].rx2('tip')
+        node_attr = pd.DataFrame({nodes_dist, parents_dist})
+        # node_1 = graph_data[1].rx2('node1')
+        # node_2 = graph_data[1].rx2('node2')
         num_edges = max(len(node_1), len(node_2))
         num_nodes = len(nodes_dist)
         offset = offset + num_edges
@@ -926,7 +920,6 @@ class Formatter:
         labels = None
         if mode == 'sim' or len(self.param_data) > 0:
             labels = pd.read_csv(lbl_fn, header=0)
-            # print("labels:", labels)
             if labels['model_type'].iloc[0] not in self.select_classes:
                 return None
             
