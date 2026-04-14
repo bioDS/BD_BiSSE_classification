@@ -21,15 +21,17 @@ import torch
 from multiprocessing import cpu_count
 from tqdm import tqdm
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import math
 
 # phyddle imports
 from phyddle import utilities as util
 from phyddle import network
 from torch_geometric.data import Data as GeoData
-#from torch_geometric.loader import DataLoader as GeoLoader
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader as GeoLoader
+from torch.utils.data import DataLoader, Subset
 from torch_geometric.utils import to_torch_coo_tensor
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data as GeoData
 from torch_geometric.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
@@ -43,6 +45,110 @@ torch.cuda.set_per_process_memory_fraction(0.8, device=0)
 # device = torch.device(f'cuda:{local_rank}')
 
 ##################################################
+
+#ChatGPT code to read data into memory in batches
+class HDF5BlockDataset():
+    def __init__(self, file_path, blocks, trainer = None):
+        self.file_path = file_path
+        # self.chunk_size = chunk_size
+        self.trainer = trainer
+        self.blocks = blocks
+
+        with h5py.File(file_path, 'r') as f:
+            self.idx = f["idx"][:]
+            self.num_edges = f["num_edges"][:]
+            self.num_nodes = f["num_nodes"][:]
+            # self.label_names = [x.decode("utf-8") for x in f["label_names"][:].ravel()]
+            label_names = f["label_names"][:].squeeze()
+            label_names = [x.decode("utf-8") for x in label_names]
+            # self.label_names = []
+            # for l in label_names:
+            #     self.label_names.append(l)
+            self.label_names = label_names#.to(torch.float32)
+            print("self.label_names", self.label_names)
+            self.labels = f["labels"][:]
+            self.aux_data = f["aux_data"][:]
+            self.aux_data_names = [x.decode("utf-8") for x in f["aux_data_names"][:].ravel()]        # full_labels_num, full_labels_cat = self.separate_labels(self.labels)
+        # print("self.idx", self.idx)
+        # print("num edges", self.num_edges)
+        # print("num nodes", self.num_nodes)
+        # print("label names", self.label_names)
+        # print("labels", self.labels)
+        # print("aux data", self.aux_data)
+        # print("aux names", self.aux_data_names)
+        self.offsets = np.zeros(len(self.idx)+1, dtype=np.int64)
+        self.offsets[1:] = np.cumsum(self.num_edges)
+        # print("cumulative sum", self.offsets)
+        self.file = None
+    
+    def __len__(self):
+        return len(self.blocks)
+
+    def adjust_num_labels(self, labels_num):
+        labels_num = labels_num.to(torch.float32)
+        col0 = labels_num[:,0]
+        col1 = labels_num[:,1]
+        col2 = labels_num[:,2]
+        col3 = labels_num[:,3]
+        col4 = labels_num[:,4]
+        col5 = labels_num[:,5]
+        adjusted_labels = torch.zeros((labels_num.shape[0], 4),
+                            device=labels_num.device)
+        adjusted_labels[:, 0] = torch.where(col0 < 1e7, col0, col2)
+        adjusted_labels[:, 1] = torch.where(col0 < 1e7, col0, col3)
+        adjusted_labels[:, 2] = torch.where(col1 < 1e7, col1, col4)
+        adjusted_labels[:, 3] = torch.where(col1 < 1e7, col1, col5)
+        return adjusted_labels
+
+    def __getitem__(self, i):
+        # start = i * self.chunk_size
+        # end = min((i+1)*self.chunk_size, len(self.idx))
+        # print("start:", start, "end:", end)
+       
+        # print(graph_indices)
+        if self.file is None:
+            self.file = h5py.File(self.file_path, 'r')        
+            self.phy_data = self.file["phy_data"]
+            self.graph_id = self.file["graph_id"]
+            self.node_1 = self.file["node_1"].astype(np.int64)
+            self.node_2 = self.file["node_2"].astype(np.int64)
+            self.node_attr = self.file["node_attr"]
+
+        graph_indices = self.blocks[i]
+        graph_indices = np.sort(graph_indices)
+        print("graph indices:", graph_indices)
+        phy_data = torch.from_numpy(self.phy_data[graph_indices].astype(np.float64))
+        labels = self.labels[graph_indices]
+        labels_num, labels_cat = self.trainer.separate_labels(labels, self.label_names)
+        labels_num = self.adjust_num_labels(labels_num)
+        labels_cat = labels_cat.long()
+        labels_num = labels_num.float()
+
+        aux_data = torch.from_numpy(self.aux_data[graph_indices].astype(np.float64))
+
+        node_1_list = []
+        node_2_list = []
+        node_attr_list = []
+        graph_id_list = []
+        # graph_data = []
+
+        for g in graph_indices:
+            s = self.offsets[g]
+            e = self.offsets[g + 1]
+
+            node_1_list.append(self.node_1[s:e])
+            node_2_list.append(self.node_2[s:e])
+            node_attr_list.append(self.node_attr[s:e])
+            graph_id_list.append(self.graph_id[s:e])
+        node_1 = np.concatenate(node_1_list, axis=0)
+        node_2 = np.concatenate(node_2_list, axis=0)
+        node_attr = np.concatenate(node_attr_list, axis=0)
+        graph_id = np.concatenate(graph_id_list, axis=0)
+        
+        # graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+        graph_dat = GeoData(x=torch.from_numpy(node_attr.astype(np.float64)), edge_index = torch.from_numpy(np.stack([node_1, node_2],axis=0).astype(np.int64)), y = labels_num)
+        return graph_dat
+        # return phy_data, node_attr, node_1, node_2, aux_data, self.aux_data_names, labels, self.label_names, graph_id, self.num_nodes, self.num_edges
 
 def load(args):
     """Load a Trainer object.
@@ -138,7 +244,6 @@ class Trainer:
         self.tensor_format      = str(args['tensor_format'])
         self.param_est          = dict(args['param_est'])
         self.param_data         = dict(args['param_data'])
-        self.prop_test          = float(args['prop_test'])
         self.log_offset         = float(args['log_offset'])
         self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
         
@@ -160,6 +265,7 @@ class Trainer:
         self.optimizer          = str(args['optimizer'])
         self.phy_hidden_size    = int(args['phy_hidden_size'])
         self.regularisation = str(args['regularisation'])
+        self.regression = bool(args['regression'])
         # initialized later
         self.phy_tensors        = dict()   # init with encode_all()
         self.train_dataset      = None     # init with load_input()
@@ -217,6 +323,7 @@ class Trainer:
         start_time,start_time_str = util.get_time()
         util.print_str(f'▪ Start time of {start_time_str}', verbose)
 
+        print("self.regression: ", self.regression)
         # perform run tasks
         util.print_str('▪ Loading input:', verbose)
         self.load_input()
@@ -327,7 +434,8 @@ class CnnTrainer(Trainer):
         self.norm_calib_labels_num = None
         self.has_label_cat = False
         self.has_label_num = False
-        self.ignore_label_num = True
+        self.ignore_label_num = False
+        # self.regression = True
 
         self.scheduler="manual"
         
@@ -395,6 +503,8 @@ class CnnTrainer(Trainer):
 
         return
 
+
+
     def load_input(self):
         """Load input data for the model.
 
@@ -414,7 +524,90 @@ class CnnTrainer(Trainer):
         input_labels_fn   = f'{path_prefix}.labels.csv'
         input_idx_data_fn = f'{path_prefix}.index.csv'
         input_hdf5_fn = f'{path_prefix}.hdf5'
-        
+
+        N = 0
+        with h5py.File(input_hdf5_fn, "r") as f:
+            N = f["phy_data"].shape[0]
+        perm = np.random.permutation(N)
+        print("perm:", perm)
+        block_size = 5
+        blocks = [perm[i:i+block_size] for i in range(0,N,block_size)]
+        split_1 = int(self.prop_cal*len(blocks))
+        split_2 = split_1 + int(self.prop_val*len(blocks))
+        cal_blocks = blocks[:split_1]
+        val_blocks = blocks[split_1:split_2]
+        train_blocks = blocks[split_2:]
+
+        # num_calib = int(np.floor(num_sample * self.prop_cal))
+        # num_val   = int(np.floor(num_sample * self.prop_val))
+        # num_train = num_sample - (num_val + num_calib)
+        # assert num_train > 0
+
+        # # create input subsets
+        # train_idx = np.arange(num_train, dtype='int')
+        # val_idx   = np.arange(num_val, dtype='int') + num_train
+        # calib_idx = np.arange(num_calib, dtype='int') + num_train + num_val
+
+        total_num_sum = 0
+        total_num_sq_sum = 0
+        total_num_count = 0
+        total_attr_sum = 0
+        total_attr_sq_sum = 0
+        total_attr_count = 0
+        total_aux_sum = 0
+        total_aux_sq_sum = 0
+        total_aux_count = 0
+
+        print("LOADING", input_hdf5_fn)
+        val_dataset = HDF5BlockDataset(input_hdf5_fn, val_blocks, self)
+        cal_dataset = HDF5BlockDataset(input_hdf5_fn, cal_blocks, self)
+        train_dataset = HDF5BlockDataset(input_hdf5_fn, train_blocks, self)
+        train_loader = GeoLoader(train_dataset, batch_size = 1, shuffle = False)
+        #for j, (phy_data, node_attr, node_1, node_2, aux_data, aux_data_names, labels_num, labels_cat, label_names, graph_id, num_nodes, num_edges) in tqdm(enumerate(train_loader),
+        for j, (graph_dat) in tqdm(enumerate(train_loader),
+
+                                                                    total=len(train_blocks),
+                                                                    # desc=train_msg,
+                                                                    smoothing=0):
+            print("graph_dat:", graph_dat)
+            # total_num_sum += (labels_num).sum(dim=(0,1))
+            # total_num_sq_sum += (labels_num ** 2).sum(dim=(0,1))
+            # total_num_count += labels_num.shape[0] * labels_num.shape[1]
+            # total_attr_sum += (node_attr).sum(dim=(0,1))
+            # total_attr_sq_sum +=(node_attr ** 2).sum(dim=(0,1))
+            # total_attr_count += node_attr.shape[0] * node_attr.shape[1]
+            # total_aux_sum += (aux_data).sum(dim=(0,1))
+            # total_aux_sq_sum +=(aux_data ** 2).sum(dim=(0,1))
+            # total_aux_count += aux_data.shape[0] * aux_data.shape[1]
+
+        quit()
+
+        print("total num count:", total_num_count)
+        print("total num sum:", total_num_sum)
+        print("total num sq:", total_num_sq_sum)
+        mean_num = total_num_sum / total_num_count
+        sd_num = total_num_sq_sum / total_num_count - mean_num
+        mean_attr = total_attr_sum / total_attr_count
+        sd_attr = total_attr_sq_sum / total_attr_count - mean_attr
+        mean_aux = total_aux_sum / total_aux_count
+
+        sd_aux = total_aux_sq_sum / total_aux_count - mean_aux
+        print("mean:", mean_num, sd_num)
+
+        for j, (phy_data, node_attr, node_1, node_2, aux_data, aux_data_names, labels, label_names, graph_id, num_nodes, num_edges) in tqdm(enumerate(train_loader),
+                total=len(train_blocks),
+                # desc=train_msg,
+                smoothing=0):
+            labels_num, labels_cat = self.separate_labels(labels)
+            labels_num = self.adjust_num_labels(labels_num)
+            print("labels num:", labels_num)
+            labels_num = util.normalize(labels_num, (mean_num, sd_num))#.to(self.TORCH_DEVICE)
+            aux_data = util.normalize(aux_data, (mean_aux, sd_aux))#.to(self.TORCH_DEVICE)
+            node_attr = util.normalize(node_attr,(mean_attr, sd_attr))#.to(self.TORCH_DEVICE)
+            print("normalized:", labels_num)
+
+        quit()
+
         # read phy. data, aux. data, and labels
         full_phy_data = None
         full_aux_data = None
@@ -477,6 +670,14 @@ class CnnTrainer(Trainer):
         # print(full_labels_cat)
         # print("full_labels_num")
         # print(full_labels_num)
+        adjusted_labels = np.zeros((full_labels_num.shape[0], 4))
+        adjusted_labels[:, 0] = np.where(full_labels_num[:,0] < 10000000, full_labels_num[:,0], full_labels_num[:,2])
+        adjusted_labels[:, 1] = np.where(full_labels_num[:,0] < 10000000, full_labels_num[:,0], full_labels_num[:,3])
+        adjusted_labels[:, 2] = np.where(full_labels_num[:,1] < 10000000, full_labels_num[:,1], full_labels_num[:,4])
+        adjusted_labels[:, 3] = np.where(full_labels_num[:,1] < 10000000, full_labels_num[:,1], full_labels_num[:,5])
+        # print("adjusted labels")
+        # print(adjusted_labels)
+        full_labels_num = adjusted_labels
         # print("length of node attributes")
         # print(len(full_node_attributes))
         # print(full_node_attributes)
@@ -676,7 +877,7 @@ class CnnTrainer(Trainer):
                                              val_labels_cat, val_ids, val_num_nodes, val_num_edges)
         return
 
-    def separate_labels(self, labels):
+    def separate_labels(self, input_labels, label_names=None):
         """Separates labels for categorical param_est targets.
         
         This function separates labels into numerical and categorical subsets
@@ -690,19 +891,24 @@ class CnnTrainer(Trainer):
             labels_cat (numpy.ndarray): The categorical labels.
         
         """
-
+        if label_names is not None:
+            self.label_names = label_names
         idx_num = list()
         idx_cat = list()
-        
+        print(type(input_labels))
+        labels = torch.from_numpy(input_labels).clone()
+        print(type(labels))
+        print(labels)
+        print("items:", self.param_est.items())
+        print(self.label_names)
         for k,v in self.param_est.items():
             if v == 'cat':
                 self.has_label_cat = True
                 idx = self.label_names.index(k)
-                unique_cats, encoded_cats = np.unique(labels[:,idx],
+                unique_cats, encoded_cats = torch.unique(labels[:,idx],
                                                       return_inverse=True)
-                print(unique_cats)
                 self.param_cat[k] = len(unique_cats)
-                labels[:,idx] = encoded_cats
+                labels[:,idx] = torch.tensor(encoded_cats, dtype=labels.dtype)
                 idx_cat.append( idx )
                 self.param_cat_names.append(k)
                 
@@ -715,10 +921,12 @@ class CnnTrainer(Trainer):
         
         if not self.has_label_num and not self.has_label_cat:
             util.print_err(f"No training labels found.", exit=True)
-               
+
+        print("idx num", idx_num)
+        print("idx cat", idx_cat)
         # get data subsets
-        labels_num = labels[:,idx_num].copy()
-        labels_cat = labels[:,idx_cat].copy()
+        labels_num = labels[:,idx_num].clone()
+        labels_cat = labels[:,idx_cat].clone()
 
         # done
         return labels_num, labels_cat
@@ -893,12 +1101,11 @@ class CnnTrainer(Trainer):
         self.train_history = pd.DataFrame(columns=history_col_names)
 
         # training
-        metric_names = ['loss_lower', 'loss_upper', 'loss_value',
-                        'loss_combined', 'mse_value', 'mae_value', 'medape_value', 'accuracy_combined']
+
         prev_trn_loss_combined = None
         prev_val_loss_combined = None
-        prev_trn_acc_combined = None
-        prev_val_acc_combined = None
+        # prev_trn_acc_combined = None
+        # prev_val_acc_combined = None
 
         #checkpointing code from https://medium.com/@piyushkashyap045/how-to-save-and-load-checkpoints-for-training-a-cnn-with-pytorch-e17395cdbd3d
         if self.load_model:
@@ -914,6 +1121,17 @@ class CnnTrainer(Trainer):
 
         learning_rate = self.learning_rate
         old_learning_rate = learning_rate
+
+        plt.ion()
+        fig, ax = plt.subplots()
+        train_line, = ax.plot([], [], label="Train")
+        val_line, = ax.plot([], [], label="Validation")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Training vs Validation Loss")
+        ax.legend()
+        trn_losses = []
+        val_losses = []
         for i in range(self.num_epochs):
 
             if old_learning_rate != learning_rate:
@@ -933,6 +1151,7 @@ class CnnTrainer(Trainer):
             train_length = 0.
             val_length = 0.
             val_loss_combined = 0.
+            val_loss_all_batches = 0
             trn_mse_value = 0.
             trn_mape_value = 0.
             trn_mae_value = 0.
@@ -941,7 +1160,7 @@ class CnnTrainer(Trainer):
             correct = 0
             total_graphs = 0
             self.model.train()
-            accumulation_steps = 30
+            accumulation_steps = 15
 
             # (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) = next(iter(train_loader))
             # for epoch in range(300):
@@ -989,6 +1208,10 @@ class CnnTrainer(Trainer):
                 idx_dat = idx_dat.to(self.TORCH_DEVICE)
                 lbl_num = lbl_num.to(self.TORCH_DEVICE)
                 lbl_cat = lbl_cat.to(self.TORCH_DEVICE)
+                # print("lbl cat:")
+                # print(lbl_cat)
+                # print(len(lbl_cat))
+                # print(idx_dat)
                     #graph_dat = graph_dat.to(self.TORCH_DEVICE)
 
 
@@ -1034,19 +1257,29 @@ class CnnTrainer(Trainer):
                     #print(preds)
                     # print("labels:")
                     # print(lbl_cat.flatten())
+
                     loss_list = list()
-                    if self.has_label_num:
-                        loss_value = loss_value_func(lbls_hat[0], lbl_num)
-                        loss_lower = loss_lower_func(lbls_hat[1], lbl_num)
-                        loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
-                        loss_list += [ loss_value, loss_lower, loss_upper ]
-                    if self.has_label_cat:
+                    if self.has_label_num and self.regression:
+                        # print("lbls_hat[3]", lbls_hat[3])
+                        # print("lbl_num", lbl_num)
+                        # loss_value = loss_value_func(lbls_hat[0], lbl_num)
+                        # loss_lower = loss_lower_func(lbls_hat[1], lbl_num)
+                        # loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
+                        # loss_list += [ loss_value, loss_lower, loss_upper ]
+                        loss_value = loss_value_func(lbls_hat[3], lbl_num)
+
+
+                        loss_list += [ loss_value ]
+
+                    if self.has_label_cat and self.regression == False:
+                        # print(preds)
+                        # print(lbl_cat.flatten())
                         loss_categ = loss_categ_func(preds, lbl_cat.flatten())
                         # print("preds")
-                        #p = torch.sigmoid(preds)
-                        #predicted_class = (p >= 0.5).long()
+                        # p = torch.sigmoid(preds)
+                        # predicted_class = (p >= 0.5).long()
                         # print("truth:", lbl_cat.flatten())
-                        #acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat) #BCE
+                        # acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat) #BCE
                         amax = preds.argmax(dim=1)
                         # print("pred class")
                         # print(amax)
@@ -1056,7 +1289,7 @@ class CnnTrainer(Trainer):
                         train_length += len(amax)
                         # print("correct:", train_correct)
                         #print("percent")
-                        #print(acc_categ)
+                        # print(acc_categ)
 
                         loss_list += [ loss_categ ]
                     # loss_combined = torch.stack(loss_list).sum()
@@ -1084,15 +1317,22 @@ class CnnTrainer(Trainer):
                         
 
                     # collect history stats
-                    if self.has_label_num:
-                        trn_loss_value    += loss_value.item() / num_batches
-                        trn_loss_lower    += loss_lower.item() / num_batches
-                        trn_loss_upper    += loss_upper.item() / num_batches
-                        trn_mse_value     += (torch.mean((lbl_num - lbls_hat[0])**2)).item() / num_batches
-                        trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
-                        trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
+                    # if self.has_label_num and self.regression:
+                        # trn_loss_value    += loss_value.item() / num_batches
+                        # trn_loss_lower    += loss_lower.item() / num_batches
+                        # trn_loss_upper    += loss_upper.item() / num_batches
+                        # trn_mse_value     += (torch.mean((lbl_num - lbls_hat[0])**2)).item() / num_batches
+                        # trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
+                        # trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
+                    if self.regression:
+                        trn_mse_value     += (torch.mean((lbl_num - lbls_hat[3])**2)).item() / num_batches
+                        trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[3]))).item() / num_batches
+                        trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[3])/lbl_num))).item() / num_batches
+                        # print("add to train mse", (torch.mean((lbl_num - lbls_hat[3])**2)).item() / num_batches)
+                        # print("lbl", lbl_num)
+                        # print("hat", lbls_hat[3])
+                        # quit()
                     trn_loss_combined += loss_combined.item() / num_batches
-                
                 
                 # backward pass to update gradients
                 #loss_combined.requires_grad = True #KT
@@ -1105,6 +1345,7 @@ class CnnTrainer(Trainer):
                     #print("updating optimizer")
                     optimizer.step()
 
+
                     # reset gradients for tensors
                     optimizer.zero_grad()
 
@@ -1112,17 +1353,25 @@ class CnnTrainer(Trainer):
 
             #scheduler.step()
             #print(scheduler.get_last_lr())
-            
-            trn_acc_combined += train_correct / train_length
+            if self.regression == False:
+                trn_acc_combined += train_correct / train_length
+                metric_names = ['loss', 'loss_combined', 'accuracy_combined']#, 'accuracy_combined']
+                train_metric_vals = [ trn_loss_value, trn_loss_combined, trn_acc_combined ] 
+            else:
+                metric_names = ['loss', 'loss_combined', 'mse', 'mae', 'mape']#, 'accuracy_combined']
+                train_metric_vals = [ trn_loss_value, trn_loss_combined, trn_mse_value, trn_mae_value, trn_mape_value]
+
             # print("total correct:", train_correct, " out of ", train_length)
 
-            train_metric_vals = [ trn_loss_lower, trn_loss_upper, trn_loss_value,
-                                  trn_loss_combined, trn_mse_value,
-                                  trn_mae_value, trn_mape_value, trn_acc_combined ]
+            # train_metric_vals = [ trn_loss_lower, trn_loss_upper, trn_loss_value,
+            #                       trn_loss_combined, trn_mse_value,
+            #                       trn_mae_value, trn_mape_value ] #, trn_acc_combined
 
+            trn_losses.append(trn_loss_combined)
 
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t'
-            trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
+            if not self.regression:
+                trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc_combined)}'
 
             # print("pre model eval")
 
@@ -1185,19 +1434,30 @@ class CnnTrainer(Trainer):
                         # correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
                         # total_graphs = total_graphs + len(val_lbl_cat.flatten())
 
-                        if self.has_label_num:
-                            val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
-                            val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
-                            val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
-                            val_loss_list += [ val_loss_value, val_loss_lower, val_loss_upper ]
+                        if self.has_label_num and self.regression:
+                            # val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
+                            # val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
+                            # val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
+                            val_loss_value = loss_value_func(lbls_hat[3], val_lbl_num).item()
+                            # print("val loss value:",val_loss_value)
+                            val_loss_list += [ val_loss_value ] # val_loss_lower, val_loss_upper
+
                         # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
-                        if self.has_label_cat:
+                        if self.has_label_cat and not self.regression:
+                            # print(third_arg)
+                            # print(val_lbl_cat.flatten())
                             val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten()).item()
                             val_loss_list += [ val_loss_categ ]
-                            #p = torch.sigmoid(third_arg)
-                            #predicted_class = (p >= 0.5).long()
+
                             # print("truth:", lbl_cat.flatten())
-                            # val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
+                            if not self.regression:
+                                # p = torch.sigmoid(third_arg)
+                                # predicted_class = (p >= 0.5).long()
+                                predicted_class = third_arg.argmax(dim=1)
+                                # print(third_arg)
+                                # print("predicted class:")
+                                # print(predicted_class)
+                                val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
                             pred_class = third_arg.argmax(dim=1) 
                             if j % 60 == 0:
                                 # print("pred val:\t\t", pred_class) 
@@ -1226,31 +1486,42 @@ class CnnTrainer(Trainer):
                             val_loss_combined = np.median(val_loss_list)
                         l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
                         l1_lambda = 1e-5
-                        for p in self.model.parameters():
-                            l1_norm += p.abs().sum()
-                        l1_norm = l1_norm.item()
-                        val_loss_combined = val_loss_combined + l1_lambda*l1_norm
-
+                        l2_lambda = 1e-4
+                        if self.regularisation == "L1" or self.regularisation == "L1L2":
+                            for p in self.model.parameters():
+                                l1_norm += p.abs().sum()
+                            l1_norm = l1_norm.item()
+                            val_loss_combined = val_loss_combined + l1_lambda*l1_norm
+                        if self.regularisation == "L2" or self.regularisation == "L1L2":
+                            l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
+                            val_loss_combined = val_loss_combined + l2_lambda*l2_norm
                         val_mse_value = 0.
                         val_mae_value = 0.
                         val_mape_value = 0.
-                        if self.has_label_num:
-                            val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[0])**2)).item()
-                            val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[0]))).item()
-                            val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[0]) / val_lbl_num))).item()
+                        if self.has_label_num and self.regression:
+                            val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[3])**2)).item()
+                            val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[3]))).item()
+                            val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[3]) / val_lbl_num))).item()
+                            val_loss_all_batches += val_loss_combined.item() / val_num_batches
+                            val_losses.append(val_loss_all_batches)
+                    if self.regression == False:                  
+                        print("total correct:", val_correct, " out of ", val_length)
+                        # val_acc_combined = val_correct/val_length  
+                        val_metric_vals = [ val_loss_value,
+                                                val_loss_combined, val_acc_combined]
+                        val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
+                        val_losses.append(val_loss_combined)
+                    else:
+                        val_metric_vals = [ val_loss_value, 
+                                                val_loss_combined, val_mse_value, val_mae_value,
+                                                val_mape_value ]
 
 
-
-                    print("total correct:", val_correct, " out of ", val_length)
-                    val_acc_combined = val_correct/val_length  
-                    val_metric_vals = [ val_loss_value, val_loss_lower, val_loss_upper,
-                                            val_loss_combined, val_mse_value, val_mae_value,
-                                            val_mape_value, val_acc_combined ]
                     # acc = correct/(total_graphs)
                     # print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
                 # raw training metrics for epoch
+                    # val_loss_combined = val_metric_vals
                     val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
-                    val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
 
             
             #scheduler.step(val_loss_combined)
@@ -1258,9 +1529,11 @@ class CnnTrainer(Trainer):
             #print(f"LR: {current_lr:.6f}")
 
             # changes in training metrics between epochs
+                if self.regression:
+                    trn_acc_combined = 0
+                    prev_trn_acc_combined = 0
                 if i > 0:
-                    diff_trn_acc = trn_acc_combined - prev_trn_acc_combined
-                    diff_val_acc = val_acc_combined - prev_val_acc_combined
+                    
                     diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
                     diff_val_loss = val_loss_combined - prev_val_loss_combined
                     if (prev_trn_loss_combined == 0):
@@ -1271,41 +1544,49 @@ class CnnTrainer(Trainer):
                         rat_val_loss = 100
                     else:
                         rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
-                    if (prev_trn_acc_combined == 0):
-                        rat_trn_acc = 100
-                    else:
-                        rat_trn_acc  = 100 * round(trn_acc_combined / prev_trn_acc_combined - 1.0, ndigits=4)
-                    if (prev_val_acc_combined == 0):
-                        rat_val_acc = 100
-                    else:
-                        rat_val_acc  = 100 * round(val_acc_combined / prev_val_acc_combined - 1.0, ndigits=4)
                     
                     diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
                     diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
                     rat_trn_loss_str  = '{0:+.2f}'.format(rat_trn_loss).rjust(4, ' ')
                     rat_val_loss_str  = '{0:+.2f}'.format(rat_val_loss).rjust(4, ' ')
 
-                    diff_trn_acc_str = '{0:+.4f}'.format(diff_trn_acc)
-                    diff_val_acc_str = '{0:+.4f}'.format(diff_val_acc)
-                    rat_trn_acc_str  = '{0:+.2f}'.format(rat_trn_acc).rjust(4, ' ')
-                    rat_val_acc_str  = '{0:+.2f}'.format(rat_val_acc).rjust(4, ' ')
-                
+                    
                     trn_color = 31 if diff_trn_loss >= 0 else 32  # green or red
                     val_color = 31 if diff_val_loss >= 0 else 32  # green or red
+                    if not self.regression:
+                        diff_trn_acc = trn_acc_combined - prev_trn_acc_combined
+                        diff_val_acc = val_acc_combined - prev_val_acc_combined
+                        if (prev_trn_acc_combined == 0):
+                            rat_trn_acc = 100
+                        else:
+                            rat_trn_acc  = 100 * round(trn_acc_combined / prev_trn_acc_combined - 1.0, ndigits=4)
+                        if (prev_val_acc_combined == 0):
+                            rat_val_acc = 100
+                        else:
+                            rat_val_acc  = 100 * round(val_acc_combined / prev_val_acc_combined - 1.0, ndigits=4)
+                        diff_trn_acc_str = '{0:+.4f}'.format(diff_trn_acc)
+                        diff_val_acc_str = '{0:+.4f}'.format(diff_val_acc)
+                        rat_trn_acc_str  = '{0:+.2f}'.format(rat_trn_acc).rjust(4, ' ')
+                        rat_val_acc_str  = '{0:+.2f}'.format(rat_val_acc).rjust(4, ' ')
+                        trn_acc_change_str  = f'  abs: {util.phyddle_str(diff_trn_acc_str, style=0, color=trn_color)}'
+                        trn_acc_change_str += f'  rel: {util.phyddle_str(rat_trn_acc_str, style=0, color=trn_color)}%'
+                        val_acc_change_str  = f'  abs: {util.phyddle_str(diff_val_acc_str, style=0, color=val_color)}'
+                        val_acc_change_str += f'  rel: {util.phyddle_str(rat_val_acc_str, style=0, color=val_color)}%'
+                        trn_acc_str += trn_acc_change_str
+                        val_acc_str += val_acc_change_str
+                
+                    
+
                     trn_loss_change_str  = f'  abs: {util.phyddle_str(diff_trn_loss_str, style=0, color=trn_color)}'
                     trn_loss_change_str += f'  rel: {util.phyddle_str(rat_trn_loss_str, style=0, color=trn_color)}%'
                     val_loss_change_str  = f'  abs: {util.phyddle_str(diff_val_loss_str, style=0, color=val_color)}'
                     val_loss_change_str += f'  rel: {util.phyddle_str(rat_val_loss_str, style=0, color=val_color)}%'
 
-                    trn_acc_change_str  = f'  abs: {util.phyddle_str(diff_trn_acc_str, style=0, color=trn_color)}'
-                    trn_acc_change_str += f'  rel: {util.phyddle_str(rat_trn_acc_str, style=0, color=trn_color)}%'
-                    val_acc_change_str  = f'  abs: {util.phyddle_str(diff_val_acc_str, style=0, color=val_color)}'
-                    val_acc_change_str += f'  rel: {util.phyddle_str(rat_val_acc_str, style=0, color=val_color)}%'
+
                     trn_loss_str += trn_loss_change_str
                     val_loss_str += val_loss_change_str
 
-                    trn_acc_str += trn_acc_change_str
-                    val_acc_str += val_acc_change_str
+
 
                     if diff_val_loss >= 0:
                         val_bad_count += 1
@@ -1319,25 +1600,46 @@ class CnnTrainer(Trainer):
                         #     learning_rate = learning_rate * 1.25
                         #     val_cycle_good_count = 0
 
-                if i >= 15:
-                    if (val_bad_count - 2) % 3 == 0:
-                        learning_rate = learning_rate / 1.25
-                    if val_cycle_good_count != 0 and val_cycle_good_count % 5 == 0:
-                        learning_rate = learning_rate * 1.25
+                # if i >= 15:
+                    # if (val_bad_count - 2) % 3 == 0:
+                    #     learning_rate = learning_rate / 1.25
+                    # if val_cycle_good_count != 0 and val_cycle_good_count % 5 == 0:
+                    #     learning_rate = learning_rate * 1.25
 
                 prev_trn_loss_combined = trn_loss_combined
                 prev_val_loss_combined = val_loss_combined
 
-                prev_trn_acc_combined = trn_acc_combined
-                prev_val_acc_combined = val_acc_combined
+                if not self.regression:
+                    prev_trn_acc_combined = trn_acc_combined
+                    prev_val_acc_combined = val_acc_combined
                 # display training metric progress
-                print(trn_loss_str, trn_acc_str)
-                print("")
-                print(val_loss_str, val_acc_str)
-                print('')
+                train_line.set_data(range(len(trn_losses)), trn_losses)                
+                val_line.set_data(range(len(val_losses)), val_losses)
+                print("trn losses", trn_losses)
+                print("val losses", val_losses)
+                ax.relim()
+                ax.autoscale_view()
+                plt.pause(0.01)  # small delay to refresh UI
+
+
+                print("regression:", self.regression)
+                if self.regression:
+                    print(trn_loss_str)
+                    print("")
+                    print(val_loss_str)
+                    print("")
+                else:
+                    print(trn_loss_str, trn_acc_str)
+                    print("")
+                    print(val_loss_str, val_acc_str)
+                    print('')
+
+                # for name, param in self.model.named_parameters():
+                #     if param.requires_grad:
+                #         print(f"{name}: mean={param.data.mean():.4f}, std={param.data.std():.4f}")
                 # update network parameters
 
-
+            
             # update train history log
             self.update_train_history(i, metric_names, train_metric_vals, 'train')
             self.update_train_history(i, metric_names, val_metric_vals, 'validation')
@@ -1354,7 +1656,12 @@ class CnnTrainer(Trainer):
             # early stopping
             if val_bad_count >= self.num_early_stop and self.num_early_stop > 0 and i < 15:
                 print(f'Early stop: validation loss increased for num_early_stop={self.num_early_stop} consecutive epochs')
+                plt.close()
                 break
+        
+        # plt.ioff()
+        # plt.show()
+        plt.close()
 
         # print(self.train_history)
 
@@ -1372,7 +1679,6 @@ class CnnTrainer(Trainer):
             dataset_name (str): name of dataset that is logged (e.g. train or validation)
 
         """
-
         assert len(metric_names) == len(metric_vals)
         
         for i,(j,k) in enumerate(zip(metric_names, metric_vals)):
