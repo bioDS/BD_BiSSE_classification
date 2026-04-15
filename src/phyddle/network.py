@@ -104,14 +104,12 @@ class GCN_PhyloPool(torch.nn.Module):
         x = self.gconv2(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
-
         x, num_nodes = to_dense_batch(x, batch)
         x_padded = x.permute(0,2,1)
         x_padded = self.conv1(x_padded)
         x_padded = F.relu(x_padded)
         x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
         x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
-        
         x_padded = self.conv2(x_padded)
         x_padded = F.relu(x_padded)
         x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
@@ -151,7 +149,6 @@ class GCN_PhyloPool(torch.nn.Module):
         out = F.relu(self.lin1(selected_nodes_flattened))
         out = F.dropout(out, p=0.01, training=self.training)
         out = self.lin2(out)
-
 
         return out
 
@@ -202,6 +199,7 @@ class GCN(torch.nn.Module):
         #     batch = x.new_zeros(x.size(0), dtype=torch.long)
         edge_index = edge_index.to(self.TORCH_DEVICE)
         batch = batch.to(self.TORCH_DEVICE)
+        print("find embeddings")
 
 
         
@@ -234,6 +232,7 @@ class GCN(torch.nn.Module):
         x = self.conv3(x, edge_index)
 
         # 2. Readout layer
+        print("BATCH:", batch)
         x = global_mean_pool(x, batch)  # [batch_size, hidden_channels]
         #print("after pooling")
         #print(x)
@@ -241,8 +240,8 @@ class GCN(torch.nn.Module):
         # 3. Apply a final classifier
         x = F.dropout(x, p=0.01, training=self.training)
         x = self.lin(x)
-
-
+    
+        print("returning")
         return x
 
 
@@ -256,7 +255,6 @@ class Dataset(Geoset):
     """
     # Constructor
     def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
-        print("phy_data:", phy_data.shape)
         # quit()
         self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
         self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
@@ -288,10 +286,6 @@ class Dataset(Geoset):
             quit()
         prev_edge_ind = 0
         prev_node_ind = 0
-        print("edges:")
-        print(edges_data.shape)
-        print("node data:")
-        print(node_data.shape)
 
         # print("LABELS NUM in network")
         # print(self.labels_num)
@@ -370,7 +364,7 @@ class ParameterEstimationNetwork(nn.Module):
         
         # initialize base class
         super(ParameterEstimationNetwork, self).__init__()
-
+        print("initialising PEN")
 
         # width for key input/output
         self.phy_dat_width  = phy_dat_width
@@ -568,8 +562,10 @@ class ParameterEstimationNetwork(nn.Module):
 
     def forward(self, graph_dat): # forward(self, phy_dat, graph_dat, aux_dat):
         """Forward-pass function of input through network to output labels."""
-        
         # Phylogenetic Tensor forwarding
+        # print("FORWARD")
+        # print(type(graph_dat))
+        # print(graph_dat)
         num_sample = 500 # phy_dat.shape[0]
 
         # MJL: Does this need to be set? Seems like no.

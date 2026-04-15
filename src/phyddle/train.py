@@ -28,7 +28,7 @@ import math
 from phyddle import utilities as util
 from phyddle import network
 from torch_geometric.data import Data as GeoData
-from torch_geometric.loader import DataLoader as GeoLoader
+from torch_geometric.loader import DataLoader as GeoLoader, DataListLoader
 from torch.utils.data import DataLoader, Subset
 from torch_geometric.utils import to_torch_coo_tensor
 from torch_geometric.data import Batch, Data as GeoData
@@ -57,7 +57,7 @@ class HDF5BlockDataset():
         with h5py.File(file_path, 'r') as f:
             self.idx = f["idx"][:]
             self.num_edges = f["num_edges"][:]
-            self.num_nodes = f["num_nodes"][:]
+            num_nodes = f["num_nodes"][:]
             # self.label_names = [x.decode("utf-8") for x in f["label_names"][:].ravel()]
             label_names = f["label_names"][:].squeeze()
             label_names = [x.decode("utf-8") for x in label_names]
@@ -69,15 +69,10 @@ class HDF5BlockDataset():
             self.labels = f["labels"][:]
             self.aux_data = f["aux_data"][:]
             self.aux_data_names = [x.decode("utf-8") for x in f["aux_data_names"][:].ravel()]        # full_labels_num, full_labels_cat = self.separate_labels(self.labels)
-        # print("self.idx", self.idx)
-        # print("num edges", self.num_edges)
-        # print("num nodes", self.num_nodes)
-        # print("label names", self.label_names)
-        # print("labels", self.labels)
-        # print("aux data", self.aux_data)
-        # print("aux names", self.aux_data_names)
         self.offsets = np.zeros(len(self.idx)+1, dtype=np.int64)
         self.offsets[1:] = np.cumsum(self.num_edges)
+        self.node_offsets = np.zeros(len(self.idx)+1, dtype=np.int64)
+        self.node_offsets[1:] = np.cumsum(num_nodes)
         # print("cumulative sum", self.offsets)
         self.file = None
     
@@ -116,15 +111,16 @@ class HDF5BlockDataset():
 
         graph_indices = self.blocks[i]
         graph_indices = np.sort(graph_indices)
-        print("graph indices:", graph_indices)
-        phy_data = torch.from_numpy(self.phy_data[graph_indices].astype(np.float64))
+        # print("graph indices:", graph_indices)
+        phy_data = torch.from_numpy(self.phy_data[graph_indices].astype(np.float32))
         labels = self.labels[graph_indices]
+        idx = torch.as_tensor(self.idx[graph_indices], dtype=torch.long)
         labels_num, labels_cat = self.trainer.separate_labels(labels, self.label_names)
         labels_num = self.adjust_num_labels(labels_num)
         labels_cat = labels_cat.long()
         labels_num = labels_num.float()
 
-        aux_data = torch.from_numpy(self.aux_data[graph_indices].astype(np.float64))
+        aux_data = torch.from_numpy(self.aux_data[graph_indices].astype(np.float32))
 
         node_1_list = []
         node_2_list = []
@@ -132,22 +128,29 @@ class HDF5BlockDataset():
         graph_id_list = []
         # graph_data = []
 
+        # print("graph indices:", graph_indices)
+        graph_list = []
+        ind_count = 0
         for g in graph_indices:
             s = self.offsets[g]
             e = self.offsets[g + 1]
+            s_nodes = self.node_offsets[g]
+            e_nodes = self.node_offsets[g+1]
+            edge_index =  torch.from_numpy(np.stack([self.node_1[s:e], self.node_2[s:e]],axis=0).astype(np.int64))
+            min_index =   edge_index.min()
+            edge_index = torch.sub(edge_index, min_index)
+            unique = torch.unique(edge_index)
+            all = torch.arange(edge_index.max()+1)
+            difference = all[torch.isin(all, unique, invert=True)]
+            reduction = torch.searchsorted(difference, all, right=False)
+            edge_index=  torch.sub(edge_index, reduction[edge_index])
 
-            node_1_list.append(self.node_1[s:e])
-            node_2_list.append(self.node_2[s:e])
-            node_attr_list.append(self.node_attr[s:e])
-            graph_id_list.append(self.graph_id[s:e])
-        node_1 = np.concatenate(node_1_list, axis=0)
-        node_2 = np.concatenate(node_2_list, axis=0)
-        node_attr = np.concatenate(node_attr_list, axis=0)
-        graph_id = np.concatenate(graph_id_list, axis=0)
-        
+            graph_list.append(GeoData(x=torch.from_numpy(np.asarray(self.node_attr[s_nodes:e_nodes],dtype=np.float32)), edge_index = edge_index, y = labels_cat[ind_count], idx=g, lbl_cat=labels_cat[ind_count], lbl_num=labels_num[ind_count], aux_dat=torch.from_numpy(self.aux_data[g].astype(np.float32)).view(1,-1)))
+            ind_count += 1
         # graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
-        graph_dat = GeoData(x=torch.from_numpy(node_attr.astype(np.float64)), edge_index = torch.from_numpy(np.stack([node_1, node_2],axis=0).astype(np.int64)), y = labels_num)
-        return graph_dat
+        #graph_dat = GeoData(x=node_attr, edge_index = torch.from_numpy(np.stack([node_1, node_2],axis=0).astype(np.int64)), y = labels_num)
+        # return (graph_dat, idx, labels_num, labels_cat, node_attr, aux_data)
+        return graph_list
         # return phy_data, node_attr, node_1, node_2, aux_data, self.aux_data_names, labels, self.label_names, graph_id, self.num_nodes, self.num_edges
 
 def load(args):
@@ -271,6 +274,13 @@ class Trainer:
         self.train_dataset      = None     # init with load_input()
         self.val_dataset        = None     # init with load_input()
         self.calib_dataset      = None     # init with load_input()
+        self.train_blocks       = None
+        self.cal_blocks         = None
+        self.val_blocks         = None
+        self.num_msd            = None
+        self.attr_msd           = None
+        self.aux_msd            = None
+
         
         # set CPUs
         if self.num_proc <= 0:
@@ -327,10 +337,11 @@ class Trainer:
         # perform run tasks
         util.print_str('▪ Loading input:', verbose)
         self.load_input()
-        num_rjust = len(str(len(self.train_dataset)))
-        util.print_str(f'  ▪ ' + str(len(self.train_dataset)).rjust(num_rjust) + ' training examples', verbose)
-        util.print_str(f'  ▪ ' + str(len(self.calib_dataset)).rjust(num_rjust) + ' calibration examples', verbose)
-        util.print_str(f'  ▪ ' + str(len(self.val_dataset)).rjust(num_rjust) + ' validation examples', verbose)
+
+        num_rjust = len(str(sum(block.shape[0] for block in self.train_blocks)))
+        util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.train_blocks)).rjust(num_rjust) + ' training examples', verbose)
+        util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.cal_blocks)).rjust(num_rjust) + ' calibration examples', verbose)
+        util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.val_blocks)).rjust(num_rjust) + ' validation examples', verbose)
 
         util.print_str('▪ Training targets:', verbose)
         num_ljust = max([len(k) for k in self.param_est.keys()])
@@ -436,6 +447,7 @@ class CnnTrainer(Trainer):
         self.has_label_num = False
         self.ignore_label_num = False
         # self.regression = True
+        self.block_size = 0
 
         self.scheduler="manual"
         
@@ -530,14 +542,19 @@ class CnnTrainer(Trainer):
             N = f["phy_data"].shape[0]
         perm = np.random.permutation(N)
         print("perm:", perm)
-        block_size = 5
-        blocks = [perm[i:i+block_size] for i in range(0,N,block_size)]
+        self.block_size = 3 #100
+        blocks = [perm[i:i+self.block_size] for i in range(0,N,self.block_size)]
         split_1 = int(self.prop_cal*len(blocks))
         split_2 = split_1 + int(self.prop_val*len(blocks))
-        cal_blocks = blocks[:split_1]
-        val_blocks = blocks[split_1:split_2]
-        train_blocks = blocks[split_2:]
-
+        # print("prop cal:", self.prop_cal)
+        # print("split 1:", split_1)
+        # print("split 2:", split_2)
+        self.cal_blocks = blocks[:split_1]
+        self.val_blocks = blocks[split_1:split_2]
+        self.train_blocks = blocks[split_2:]
+        assert len(self.val_blocks) > 0
+        assert len(self.train_blocks) > 0
+        assert len(self.cal_blocks) > 0
         # num_calib = int(np.floor(num_sample * self.prop_cal))
         # num_val   = int(np.floor(num_sample * self.prop_val))
         # num_train = num_sample - (num_val + num_calib)
@@ -548,40 +565,63 @@ class CnnTrainer(Trainer):
         # val_idx   = np.arange(num_val, dtype='int') + num_train
         # calib_idx = np.arange(num_calib, dtype='int') + num_train + num_val
 
-        total_num_sum = 0
-        total_num_sq_sum = 0
+        total_num_sum = torch.zeros(1)
+        total_num_sq_sum = torch.zeros(1)
         total_num_count = 0
-        total_attr_sum = 0
+        self.num_node_features = 2 # 3
+        total_attr_sum = torch.zeros(self.num_node_features)
         total_attr_sq_sum = 0
         total_attr_count = 0
-        total_aux_sum = 0
-        total_aux_sq_sum = 0
+        total_aux_sum = torch.zeros(16)
+        total_aux_sq_sum = torch.zeros(16)
         total_aux_count = 0
 
         print("LOADING", input_hdf5_fn)
-        val_dataset = HDF5BlockDataset(input_hdf5_fn, val_blocks, self)
-        cal_dataset = HDF5BlockDataset(input_hdf5_fn, cal_blocks, self)
-        train_dataset = HDF5BlockDataset(input_hdf5_fn, train_blocks, self)
-        train_loader = GeoLoader(train_dataset, batch_size = 1, shuffle = False)
-        #for j, (phy_data, node_attr, node_1, node_2, aux_data, aux_data_names, labels_num, labels_cat, label_names, graph_id, num_nodes, num_edges) in tqdm(enumerate(train_loader),
-        for j, (graph_dat) in tqdm(enumerate(train_loader),
+        # val_dataset = HDF5BlockDataset(input_hdf5_fn, val_blocks, self)
+        # cal_dataset = HDF5BlockDataset(input_hdf5_fn, cal_blocks, self)
+        self.train_dataset = HDF5BlockDataset(input_hdf5_fn, self.train_blocks, self)
+        # self.num_classes = len(np.unique(full_labels_cat))
+        classes = []
+        # #for j, (phy_data, node_attr, node_1, node_2, aux_data, aux_data_names, labels_num, labels_cat, label_names, graph_id, num_nodes, num_edges) in tqdm(enumerate(train_loader),
+        # for j, graph_list in tqdm(enumerate(train_loader), #, idx, labels_num, labels_cat, node_attr, aux_data
 
-                                                                    total=len(train_blocks),
-                                                                    # desc=train_msg,
-                                                                    smoothing=0):
-            print("graph_dat:", graph_dat)
-            # total_num_sum += (labels_num).sum(dim=(0,1))
-            # total_num_sq_sum += (labels_num ** 2).sum(dim=(0,1))
-            # total_num_count += labels_num.shape[0] * labels_num.shape[1]
-            # total_attr_sum += (node_attr).sum(dim=(0,1))
-            # total_attr_sq_sum +=(node_attr ** 2).sum(dim=(0,1))
-            # total_attr_count += node_attr.shape[0] * node_attr.shape[1]
-            # total_aux_sum += (aux_data).sum(dim=(0,1))
-            # total_aux_sq_sum +=(aux_data ** 2).sum(dim=(0,1))
-            # total_aux_count += aux_data.shape[0] * aux_data.shape[1]
+        #                                                             total=len(self.train_blocks),
+        #                                                             # desc=train_msg,
+        #                                                             smoothing=0):
+        #     print("graph_dat:", graph_list)
+        # print("before batch calculation")
 
-        quit()
-
+        # print("total batches:", self.total_batches)
+        pbar = tqdm(total=len(self.train_dataset))
+        for block_idx in range(len(self.train_dataset)):
+            # print("block idx:", block_idx)
+            graphs = self.train_dataset[block_idx]
+            # print("graphs:", graphs)
+            labels_num =  [g.lbl_num for g in graphs]
+            labels_cat =  [g.lbl_cat for g in graphs]
+            node_attr = [g.x for g in graphs]
+            # for n in node_attr:
+            #     print(n)
+            node_sums = []
+            for g in graphs:
+                x = torch.as_tensor(g.x, dtype=torch.float32)  # [N_i, 2]
+                labels_num = torch.as_tensor(g.y, dtype=torch.float32)  # [N_i, 2]
+                aux = torch.as_tensor(g.aux_dat, dtype=torch.float32)
+                total_num_sum += labels_num.sum(dim=0)
+                total_num_sq_sum += (labels_num ** 2).sum(dim=0)
+                total_num_count += labels_num.shape[0]
+                total_attr_sum += x.sum(dim=0)
+                total_attr_sq_sum += (x ** 2).sum(dim=0)
+                total_attr_count += x.shape[0]
+                total_aux_sum += aux.squeeze(0)
+                total_aux_sq_sum += (aux.squeeze(0) ** 2)
+                total_aux_count += 1
+                for lab in np.unique(g.lbl_cat):
+                    if lab not in classes:
+                        classes.append(lab)
+            pbar.update(1)
+        pbar.close()
+        self.num_classes = len(classes)
         print("total num count:", total_num_count)
         print("total num sum:", total_num_sum)
         print("total num sq:", total_num_sq_sum)
@@ -592,291 +632,24 @@ class CnnTrainer(Trainer):
         mean_aux = total_aux_sum / total_aux_count
 
         sd_aux = total_aux_sq_sum / total_aux_count - mean_aux
-        print("mean:", mean_num, sd_num)
+        self.num_msd = (mean_num, sd_num)
+        self.attr_msd = (mean_attr, sd_attr)
+        self.aux_msd = (mean_aux, sd_aux)
+        self.num_msd = tuple(t.to(self.TORCH_DEVICE) for t in self.num_msd)
+        self.aux_msd = tuple(t.to(self.TORCH_DEVICE) for t in self.aux_msd)
+        self.attr_msd = tuple(t.to(self.TORCH_DEVICE) for t in self.attr_msd)
+        print("self.num_msd", self.num_msd)
+        print("self.attr_msd", self.attr_msd)
+        print("self.aux_msd", self.aux_msd)
+        # self.num_node_features = 2
+        # self.train_dataset = HDF5BlockDataset(input_hdf5_fn, self.train_blocks, self)
+        # self.train_loader = GeoLoader(self.train_dataset, batch_size = 1, shuffle = False)
+        self.val_dataset = HDF5BlockDataset(input_hdf5_fn, self.val_blocks, self)
+        # self.val_loader = GeoLoader(self.val_dataset, batch_size = 1, shuffle = False)
+        self.cal_dataset = HDF5BlockDataset(input_hdf5_fn, self.cal_blocks, self)
 
-        for j, (phy_data, node_attr, node_1, node_2, aux_data, aux_data_names, labels, label_names, graph_id, num_nodes, num_edges) in tqdm(enumerate(train_loader),
-                total=len(train_blocks),
-                # desc=train_msg,
-                smoothing=0):
-            labels_num, labels_cat = self.separate_labels(labels)
-            labels_num = self.adjust_num_labels(labels_num)
-            print("labels num:", labels_num)
-            labels_num = util.normalize(labels_num, (mean_num, sd_num))#.to(self.TORCH_DEVICE)
-            aux_data = util.normalize(aux_data, (mean_aux, sd_aux))#.to(self.TORCH_DEVICE)
-            node_attr = util.normalize(node_attr,(mean_attr, sd_attr))#.to(self.TORCH_DEVICE)
-            print("normalized:", labels_num)
-
-        quit()
-
-        # read phy. data, aux. data, and labels
-        full_phy_data = None
-        full_aux_data = None
-        full_idx_data = None
-        full_labels   = None
-        if self.tensor_format == 'csv':
-            full_phy_data = pd.read_csv(input_phy_data_fn, header=None,
-                                        on_bad_lines='skip').to_numpy()
-            full_aux_data = pd.read_csv(input_aux_data_fn, header=None,
-                                        on_bad_lines='skip').to_numpy()
-            full_labels   = pd.read_csv(input_labels_fn, header=None,
-                                        on_bad_lines='skip').to_numpy()
-            full_idx_data = pd.read_csv(input_idx_data_fn,
-                                        on_bad_lines='skip').to_numpy()
-            # extract headers
-            self.aux_data_names = full_aux_data[0,:].tolist()
-            self.label_names    = full_labels[0,:].tolist()
-            full_aux_data       = full_aux_data[1:,:].astype('float64')
-            full_labels         = full_labels[1:,:].astype('float64')
-
-        elif self.tensor_format == 'hdf5':
-            hdf5_file = h5py.File(input_hdf5_fn, 'r')
-            self.aux_data_names = [ s.decode() for s in hdf5_file['aux_data_names'][0,:] ]
-            self.label_names    = [ s.decode() for s in hdf5_file['label_names'][0,:] ]
-            full_phy_data       = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
-            full_aux_data       = pd.DataFrame(hdf5_file['aux_data']).to_numpy()
-            full_idx_data       = pd.DataFrame(hdf5_file['idx']).to_numpy()
-            full_labels         = pd.DataFrame(hdf5_file['labels']).to_numpy()
-            full_node_1_data = pd.DataFrame(hdf5_file['node_1'])#.to_numpy()
-            full_node_2_data = pd.DataFrame(hdf5_file['node_2'])#.to_numpy()
-            full_nodes_attr = pd.DataFrame(hdf5_file['node_attr']).to_numpy()
-            full_graph_ids = pd.DataFrame(hdf5_file['graph_id']).to_numpy()
-            full_num_edges = pd.DataFrame(hdf5_file['num_edges']).to_numpy()
-            full_num_nodes = pd.DataFrame(hdf5_file['num_nodes']).to_numpy()
-
-            #full_descendants = pd.DataFrame(hdf5_file['descendant']).to_numpy()
-            #full_ancestors = pd.DataFrame(hdf5_file['ancestor']).to_numpy()
-            #full_time_asym = pd.DataFrame(hdf5_file['descendant']).to_numpy()
-            #full_clade_asym = pd.DataFrame(hdf5_file['clade_asym']).to_numpy()
-
-            hdf5_file.close()
-       
-        full_edges_matrix = pd.concat((full_node_1_data, full_node_2_data), axis=1).to_numpy()
-       
-        #full_node_attributes = full_node_attributes[0]
-       
-        print("attr")
-        print(full_nodes_attr)
-        print(full_nodes_attr.shape)
-        # full_node_attributes = full_nodes_attr.flatten()
-        # print("attributes")
-        # print(full_node_attributes)
-        #full_node_attributes = [([[np.diag(y) for y in x]  for x in full_nodes_dist ])]
-
-        # separate labels for categorical param_est targets
-        # print("full labels")
-        # print(full_labels)
-        full_labels_num, full_labels_cat = self.separate_labels(full_labels)
-        # print("full_labels_cat")
-        # print(full_labels_cat)
-        # print("full_labels_num")
-        # print(full_labels_num)
-        adjusted_labels = np.zeros((full_labels_num.shape[0], 4))
-        adjusted_labels[:, 0] = np.where(full_labels_num[:,0] < 10000000, full_labels_num[:,0], full_labels_num[:,2])
-        adjusted_labels[:, 1] = np.where(full_labels_num[:,0] < 10000000, full_labels_num[:,0], full_labels_num[:,3])
-        adjusted_labels[:, 2] = np.where(full_labels_num[:,1] < 10000000, full_labels_num[:,1], full_labels_num[:,4])
-        adjusted_labels[:, 3] = np.where(full_labels_num[:,1] < 10000000, full_labels_num[:,1], full_labels_num[:,5])
-        # print("adjusted labels")
-        # print(adjusted_labels)
-        full_labels_num = adjusted_labels
-        # print("length of node attributes")
-        # print(len(full_node_attributes))
-        # print(full_node_attributes)
-        # print("total num_nodes")
-        # print((full_num_nodes.astype(int).sum()))
-        # print("length of edges")
-        # print(len(full_node_1_data))
-        # print("total num_edges")
-        # print((full_num_edges.astype(int).sum()))
-        # quit()
-        
-        # data dimensions
-        num_sample             = full_phy_data.shape[0]
-        self.num_param_num    = full_labels_num.shape[1]
-        self.num_param_cat     = full_labels_cat.shape[1]
-        self.num_aux_data      = full_aux_data.shape[1]
-        
-        # shuffle datasets
-        randomized_idx     =  np.random.permutation(full_phy_data.shape[0]) # np.arange(full_phy_data.shape[0]) #
-        print("randomized idx")
-        print(randomized_idx)
-        unique_ids = np.unique(full_graph_ids)
-        #for (unique_id in unique_ids):
-
-        cumulative_edges = np.insert(np.cumsum(full_num_edges, dtype=np.int64), 0, 0)
-        cumulative_nodes = np.insert(np.cumsum(full_num_nodes, dtype=np.int64), 0, 0)
-        # print("cumulative edges")
-        # print(cumulative_edges)
-        print("cumulative nodes")
-        print(cumulative_nodes)
-        split_edges = np.split(full_edges_matrix, cumulative_edges[1:])
-
-        joined_edges = np.concatenate([split_edges[x] for x in randomized_idx])
-        split_nodes = np.split(full_nodes_attr, cumulative_nodes[1:])
-        # print("split nodes")
-        # print(split_nodes)
-        print("length split nodes")
-        print(len(split_nodes))
-        joined_nodes = np.concatenate([split_nodes[x] for x in randomized_idx])
-        
-        print(np.sum(full_num_nodes).astype(np.int64))
-        print(np.sum(full_num_nodes, dtype=np.int64))
-
-        print("randomized idx", randomized_idx)
-
-        full_num_nodes = full_num_nodes[randomized_idx]
-        full_num_edges = full_num_edges[randomized_idx]
-        full_phy_data      = full_phy_data[randomized_idx,:]
-        full_node_attributes = joined_nodes #full_nodes_attr[randomized_idx,:]
-        print("shuffled:")
-        print(full_node_attributes)
-        full_edges_matrix = joined_edges
-        full_aux_data      = full_aux_data[randomized_idx,:]
-        full_labels_num    = full_labels_num[randomized_idx,:]
-        full_labels_cat    = full_labels_cat[randomized_idx,:]
-        full_idx_data      = full_idx_data[randomized_idx]
-        full_ids      = unique_ids[randomized_idx]
-        # reshape phylogenetic tensor data based on CPV+S
-        full_phy_data.shape = (num_sample, -1, self.num_data_col)
-
-        self.num_classes = len(np.unique(full_labels_cat))
-        print("num classes = ", self.num_classes)
-        print(len(full_node_attributes))
-        print(full_num_nodes.dtype)
-        print(np.sum(full_num_nodes, dtype=np.int64))
-
-
-        for r in range(len(full_num_nodes)):
-            if full_num_nodes[r] != full_num_edges[r] + 1:
-                print(full_idx_data[r], full_num_nodes[r], full_num_edges[r])
-                quit()
-
-        # split dataset into training, test, validation, and calibration parts
-        train_idx, val_idx, calib_idx = self.split_tensor_idx(num_sample)
-        self.validate_tensor_idx(train_idx, val_idx, calib_idx)
-        print("train idx: " + str(train_idx))
-        print("LENGTH OF TRAINING DATA", len(train_idx))
-        print("val idx: " + str(val_idx))
-        print("calib idx: " + str(calib_idx))
-        
-        # save original training input
-        self.train_label_true = full_labels[train_idx,:]
-        self.train_label_index = full_idx_data[train_idx]
-
-        # normalize auxiliary data
-        norm_train_aux_data, train_aux_data_means, train_aux_data_sd = util.normalize(full_aux_data[train_idx,:])
-        self.train_aux_data_mean_sd = (train_aux_data_means, train_aux_data_sd)
-        norm_val_aux_data = util.normalize(full_aux_data[val_idx,:],
-                                           self.train_aux_data_mean_sd)
-        norm_calib_aux_data = util.normalize(full_aux_data[calib_idx,:],
-                                             self.train_aux_data_mean_sd)
-        
-        # print("training data:")
-        # print(full_node_attributes[train_idx])
-        # print(full_node_attributes[train_idx].shape)
-        # # norm_train_node_attributes = util.normalize(full_node_attributes[train_idx])[0]
-        # # norm_val_node_attributes = util.normalize(full_node_attributes[val_idx])[0]
-        # # norm_calib_node_attributes = util.normalize(full_node_attributes[calib_idx])[0]
-        # print("normalized training data:")
-        # print(norm_train_node_attributes)
-        # print(norm_train_node_attributes.shape)
-
-        # normalize labels
-        norm_train_labels_num, train_labels_num_means, train_labels_num_sd = util.normalize(full_labels_num[train_idx,:])
-        self.train_labels_num_mean_sd = (train_labels_num_means, train_labels_num_sd)
-        norm_val_labels_num = util.normalize(full_labels_num[val_idx,:],
-                                              self.train_labels_num_mean_sd)
-        self.norm_calib_labels_num = util.normalize(full_labels_num[calib_idx,:],
-                                                     self.train_labels_num_mean_sd)
-
-        # create phylogenetic data tensors
-        train_phy_data_tensor = full_phy_data[train_idx,:,:]
-        val_phy_data_tensor = full_phy_data[val_idx,:,:]
-        self.calib_phy_data_tensor = full_phy_data[calib_idx,:,:]
-        
-        self.num_node_features = 3
-
-        train_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx]))[0]))
-        val_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx]))[0]))
-        calib_node_attr_tensor = torch.tensor(np.transpose(util.normalize(np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx]))[0]))
-        print("train tensor:")
-        print(train_node_attr_tensor)
-
-        # train_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in train_idx]
-        # val_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in val_idx]
-        # calib_node_attr_tensor = [torch.tensor(full_node_attributes[i]) for i in calib_idx]
-        
-        # train_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in train_idx])
-        # val_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in val_idx])
-        # calib_node_attr_tensor = np.concatenate([split_nodes[randomized_idx[x]] for x in calib_idx])
-
-
-
-        train_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in train_idx]))
-        val_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in val_idx]))
-        calib_edges_tensor = np.transpose(np.concatenate([split_edges[randomized_idx[x]] for x in calib_idx]))
-        
-
-
-        # create categorical label tensors
-        train_labels_cat = full_labels_cat[train_idx,:]
-        val_labels_cat = full_labels_cat[val_idx,:]
-        calib_labels_cat = full_labels_cat[calib_idx,:]
-        calib_ids = full_ids[calib_idx]
-        val_ids = full_ids[val_idx]
-
-        # create index tensors
-        train_idx_tensor = full_idx_data[train_idx,:]
-        val_idx_tensor = full_idx_data[val_idx,:]
-        calib_idx_tensor = full_idx_data[calib_idx,:]
-        train_ids = full_ids[train_idx]
-        train_num_nodes = full_num_nodes[train_idx]
-        train_num_edges = full_num_edges[train_idx]
-        calib_num_nodes = full_num_nodes[calib_idx]
-        calib_num_edges = full_num_edges[calib_idx]
-        val_num_nodes = full_num_nodes[val_idx]
-        val_num_edges = full_num_edges[val_idx]
-
-        print("training data dim")
-        print(len(train_node_attr_tensor))
-        print(np.sum(train_num_nodes, dtype=np.int64))
-
-        print("ids:")
-        print("train:", train_ids)
-        print("val:", val_ids)
-        print("calib:", calib_ids)
-        print("training labels")
-        print("label 0:", sum(train_labels_cat ==0))
-        print("label 1:", sum(train_labels_cat ==1))
-        print("label 2:", sum(train_labels_cat ==2))
-        print("label 3:", sum(train_labels_cat ==3))
-
-        print("validation labels")
-        print(val_labels_cat)
-        print("label 0:", sum(val_labels_cat ==0))
-        print("label 1:", sum(val_labels_cat ==1))
-        print("label 2:", sum(val_labels_cat ==2))
-        print("label 3:", sum(val_labels_cat ==3))
-        
-
-
-        # torch datasets
-        self.train_dataset = network.Dataset(train_phy_data_tensor, train_node_attr_tensor,
-                                             train_edges_tensor, norm_train_aux_data,
-                                             train_idx_tensor,
-                                             norm_train_labels_num,
-                                             train_labels_cat, train_ids, train_num_nodes, train_num_edges)
-        self.calib_dataset = network.Dataset(self.calib_phy_data_tensor, calib_node_attr_tensor,
-                                             calib_edges_tensor, norm_calib_aux_data,
-                                             calib_idx_tensor,
-                                             self.norm_calib_labels_num,
-                                             calib_labels_cat, calib_ids, calib_num_nodes, calib_num_edges)
-        self.val_dataset   = network.Dataset(val_phy_data_tensor, val_node_attr_tensor,
-                                             val_edges_tensor, norm_val_aux_data,
-                                             val_idx_tensor,
-                                             norm_val_labels_num,
-                                             val_labels_cat, val_ids, val_num_nodes, val_num_edges)
-        return
-
+        return 
+    
     def separate_labels(self, input_labels, label_names=None):
         """Separates labels for categorical param_est targets.
         
@@ -895,12 +668,12 @@ class CnnTrainer(Trainer):
             self.label_names = label_names
         idx_num = list()
         idx_cat = list()
-        print(type(input_labels))
+        # print(type(input_labels))
         labels = torch.from_numpy(input_labels).clone()
-        print(type(labels))
-        print(labels)
-        print("items:", self.param_est.items())
-        print(self.label_names)
+        # print(type(labels))
+        # print(labels)
+        # print("items:", self.param_est.items())
+        # print(self.label_names)
         for k,v in self.param_est.items():
             if v == 'cat':
                 self.has_label_cat = True
@@ -908,22 +681,24 @@ class CnnTrainer(Trainer):
                 unique_cats, encoded_cats = torch.unique(labels[:,idx],
                                                       return_inverse=True)
                 self.param_cat[k] = len(unique_cats)
-                labels[:,idx] = torch.tensor(encoded_cats, dtype=labels.dtype)
+                labels[:,idx] = encoded_cats.clone().detach()#torch.tensor(encoded_cats, dtype=labels.dtype)
                 idx_cat.append( idx )
-                self.param_cat_names.append(k)
+                if k not in self.param_cat_names:
+                    self.param_cat_names.append(k)
                 
             # ignore numerical labels as a hack to pass parameter information for plotting without using it for predictions.
             elif v == 'num' and self.ignore_label_num == False:
                 self.has_label_num = True
                 # print(self.label_names)
                 idx_num.append( self.label_names.index(k) )
-                self.param_num_names.append(k)
+                if k not in self.param_num_names:
+                    self.param_num_names.append(k)
         
         if not self.has_label_num and not self.has_label_cat:
             util.print_err(f"No training labels found.", exit=True)
 
-        print("idx num", idx_num)
-        print("idx cat", idx_cat)
+        # print("idx num", idx_num)
+        # print("idx cat", idx_cat)
         # get data subsets
         labels_num = labels[:,idx_num].clone()
         labels_cat = labels[:,idx_cat].clone()
@@ -955,11 +730,8 @@ class CnnTrainer(Trainer):
         #self.model.aux_dat_shape = (self.num_aux_data,)
 
         # print(self.model)
-        #self.model = CreateModel()
         if self.use_cuda:
-            #self.model = torch.nn.DataParallel(self.model)
-            self.model = DataParallel(self.model)
-            # self.model = DDP(self.model)
+            self.model = DistributedDataParallel(self.model)
         self.model.to(self.TORCH_DEVICE)
 
         return
@@ -998,57 +770,40 @@ class CnnTrainer(Trainer):
             None
 
         """
+
+        n_train_graphs = sum(block.shape[0] for block in self.train_blocks)
+        n_val_graphs = sum(block.shape[0] for block in self.val_blocks)
+        n_calib_graphs = sum(block.shape[0] for block in self.cal_blocks)
+
+
         # training dataset
-        train_loader = DataLoader(dataset=self.train_dataset,
-                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)
-        val_loader = DataLoader(dataset=self.val_dataset,
-                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)
+        # train_loader = DataLoader(dataset=self.train_dataset,
+        #                                            batch_size=self.trn_batch_size, collate_fn = custom_collate)
+        # val_loader = DataLoader(dataset=self.val_dataset,
+        #                                            batch_size=self.trn_batch_size, collate_fn = custom_collate)
 
-        print("training batch size: ", str(self.trn_batch_size))
-        print("graph shape",len(self.train_dataset.graph_dat))
-        n_train_graphs = len(self.train_dataset.graph_dat)
-        n_val_graphs = len(self.val_dataset.graph_dat)
-        n_calib_graphs = len(self.calib_dataset.graph_dat)
+        # print("training batch size: ", str(self.trn_batch_size))
+        # print("graph shape",len(self.train_dataset.graph_dat))
+        # n_train_graphs = len(self.train_dataset.graph_dat)
+        # n_val_graphs = len(self.val_dataset.graph_dat)
+        # n_calib_graphs = len(self.calib_dataset.graph_dat)
 
-        num_batches = int(np.ceil(n_train_graphs / self.trn_batch_size))
-        val_num_batches = int(np.ceil(n_val_graphs / self.trn_batch_size))
-        calib_num_batches = int(np.ceil(n_calib_graphs / self.trn_batch_size))
+        # num_batches = int(np.ceil(n_train_graphs / self.trn_batch_size))
+        # val_num_batches = int(np.ceil(n_val_graphs / self.trn_batch_size))
+        # calib_num_batches = int(np.ceil(n_calib_graphs / self.trn_batch_size))
 
-        print("number of batches: " + str(num_batches))
-        # for data in train_loader:
-        #     print(f"Batch assignment: {data.batch}")  # Should be [0,0,...,1,1,...,2,2,...]
-        #     print(f"Unique batch IDs: {data.batch.unique()}")  # Should match number of graphs
-        #     break
-        # for data in val_loader:
-        #     print(f"Val Batch assignment: {data.batch}")  # Should be [0,0,...,1,1,...,2,2,...]
-        #     print(f"Val Unique batch IDs: {data.batch.unique()}")  # Should match number of graphs
-        #     break
 
-            # print(data)
-            # print()
+        print("number of batches: " + str(len(self.train_blocks)))
 
         # validation dataset
 
-        #val_phy_dat  = torch.Tensor(self.val_dataset.phy_data).to(self.TORCH_DEVICE)
-        #val_aux_dat  = torch.Tensor(self.val_dataset.aux_data).to(self.TORCH_DEVICE)
-        val_idx_dat  = torch.Tensor(self.val_dataset.idx_data).to(self.TORCH_DEVICE)
-        val_lbl_num  = torch.Tensor(self.val_dataset.labels_num).to(self.TORCH_DEVICE)
-        val_lbl_cat  = torch.Tensor(self.val_dataset.labels_cat).to(self.TORCH_DEVICE)
-        # print("VALIDATION GRAPH DATA")
-        # print(self.val_dataset.graph_data)
-        #val_graph_dat = self.val_dataset.graph_dat.to(self.TORCH_DEVICE)
-        val_graph_dat = [self.val_dataset.graph_dat[i].to(self.TORCH_DEVICE) for i in range(len(self.val_dataset.graph_dat))]
+        # val_idx_dat  = torch.Tensor(self.val_dataset.idx_data).to(self.TORCH_DEVICE)
+        # val_lbl_num  = torch.Tensor(self.val_dataset.labels_num).to(self.TORCH_DEVICE)
+        # val_lbl_cat  = torch.Tensor(self.val_dataset.labels_cat).to(self.TORCH_DEVICE)
+        # val_graph_dat = [self.val_dataset.graph_dat[i].to(self.TORCH_DEVICE) for i in range(len(self.val_dataset.graph_dat))]
         val_bad_count = 0
         val_cycle_good_count = 0
 
-        #print("val_node_data")
-        #print(self.val_dataset.node_data)
-
-        #val_node_data = [torch.Tensor(z).to(self.TORCH_DEVICE) for z in self.val_dataset.node_data]
-        #val_edges_data = [[[torch.Tensor(z).to(self.TORCH_DEVICE) for z in y] for y in x] for x in self.val_dataset.edges_data]
-
-        # model device
-        # self.model.to(self.TORCH_DEVICE)
 
         # loss functions
         q_width = self.cpi_coverage
@@ -1122,6 +877,7 @@ class CnnTrainer(Trainer):
         learning_rate = self.learning_rate
         old_learning_rate = learning_rate
 
+        print("plotting on")
         plt.ion()
         fig, ax = plt.subplots()
         train_line, = ax.plot([], [], label="Train")
@@ -1132,6 +888,7 @@ class CnnTrainer(Trainer):
         ax.legend()
         trn_losses = []
         val_losses = []
+        num_batches = len(self.train_blocks)
         for i in range(self.num_epochs):
 
             if old_learning_rate != learning_rate:
@@ -1162,197 +919,95 @@ class CnnTrainer(Trainer):
             self.model.train()
             accumulation_steps = 15
 
-            # (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) = next(iter(train_loader))
-            # for epoch in range(300):
             optimizer.zero_grad()
-            #     logits = self.model(phy_dat, graph_dat, aux_dat)
-            #     preds = logits[3]
-            #     loss = loss_categ_func(preds, lbl_cat.flatten())
-            #     loss.backward()
-            #     optimizer.step()
-            #     if epoch % 30 == 0:
-            #         print(epoch, loss.item())
-            # quit()
 
-#             for j, (phy_dat, graph_dat, aux_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
+            self.total_batches = len(self.train_dataset)*(math.ceil(self.block_size / self.trn_batch_size))
+            pbar = tqdm(total=self.total_batches)
 
-
-            for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
-                                                                    total=num_batches,
-                                                                    desc=train_msg,
-                                                                    smoothing=0):
-                
-                    # short cut batches for training
-                    # if j > 1:
-                    #     break
-
-                    # print("lbl_cat")
-                    # print(lbl_cat)
-                    
-                    # send labels to device
-                    #phy_dat = phy_dat.to(self.TORCH_DEVICE)
-                    #aux_dat = aux_dat.to(self.TORCH_DEVICE)
-                # print("type of graph dat")
-                # print(type(graph_dat))
-
-                for g in graph_dat:
-                    if (g.x.shape[0] != g.edge_index.shape[1] + 1):
-                        print(g)
-                if j > 1200:
-                    print(graph_dat)
-                #     print("j:", j)
-                #     print(len(idx_dat))
-                #     print(len(lbl_num))
-                #     print(len(lbl_cat))
-                #     print(len(graph_dat))
-                idx_dat = idx_dat.to(self.TORCH_DEVICE)
-                lbl_num = lbl_num.to(self.TORCH_DEVICE)
-                lbl_cat = lbl_cat.to(self.TORCH_DEVICE)
-                # print("lbl cat:")
-                # print(lbl_cat)
-                # print(len(lbl_cat))
-                # print(idx_dat)
-                    #graph_dat = graph_dat.to(self.TORCH_DEVICE)
-
-
-
-                    # forward pass of training data to estimate labels
-                    # print("graphs :)")
-                    # print(graph_dat)
-                for k in range(1):
+            for j in range(len(self.train_dataset)):
+                graph_list = self.train_dataset[j]
+                loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
+                for batch in loader:
+                    lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                    for g in batch:
+                        g.x = util.normalize(g.x, self.attr_msd)
+                        g.lbl_num = util.normalize(g.lbl_num,  self.num_msd)
+                        g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
+                    # batch.lbl_num = util.normalize(torch.stack([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE), self.num_msd)
+                    # batch.aux_dat = util.normalize(torch.stack([g.aux_dat for g in batch], dim=0).to(self.TORCH_DEVICE), self.aux_msd)
+                    # batch.x = util.normalize(torch.stack([g.x for g in batch], dim=0).to(self.TORCH_DEVICE), self.attr_msd)
+                    # print("updated batch:", batch)
                     try:
-                        lbls_hat = self.model(graph_dat)
+                        lbls_hat = self.model(batch)
+                        pbar.update(1)
                     except Exception as e:
-                        print("exception in lbls_hat, j:", j, e)
+                        print("exception in lbls_hat", e)
                         quit()
-
-                    # print("params")
-                    # if j == 1:
-                    #     for name, p in self.model.named_parameters():
-                    #         print(name, p)
-                    #         if p.grad is not None:
-                    #             print(name, p.grad.abs().max())
-                    # if i > 2:
-                    #     quit()
+                   
                     third_arg = lbls_hat[3] # [0:int(len(lbls_hat[3])/4)]
                     preds = third_arg #.long()
-                    # print(f"Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
-                    # print(f"Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
-                    # print(f"Unique values: {torch.unique(third_arg).numel()}")
-                    # correct += int((preds.argmax(dim=1).flatten() == lbl_cat.flatten()).sum())
-                    # total_graphs = total_graphs + len(lbl_cat.flatten())
-                    #if j == 1:
+                    
                     if j % 5 == 0: # % 150
                         amax = preds.argmax(dim=1)
-                        # print("pred val:\t\t", amax) 
-                        # print("actual labels:\t\t", lbl_cat.flatten())
-                        actual_labels = lbl_cat.flatten()
-                        selected_labels_1 = actual_labels == 1
-                        # print(amax[selected_labels_1])
-                        # print(actual_labels[selected_labels_1])
-                        selected_labels_0 = actual_labels == 0
-                        # print("number correct:\t\t", int((amax == lbl_cat.flatten()).sum()), "\twhere actual class = 1:", int((amax[selected_labels_1] == actual_labels[selected_labels_1]).sum()), "\twhere actual class = 0:", int((amax[selected_labels_0] == actual_labels[selected_labels_0]).sum()))
-
-                    #print("most recent out:")
-                    #print(preds)
-                    # print("labels:")
-                    # print(lbl_cat.flatten())
 
                     loss_list = list()
                     if self.has_label_num and self.regression:
-                        # print("lbls_hat[3]", lbls_hat[3])
-                        # print("lbl_num", lbl_num)
                         # loss_value = loss_value_func(lbls_hat[0], lbl_num)
                         # loss_lower = loss_lower_func(lbls_hat[1], lbl_num)
                         # loss_upper = loss_upper_func(lbls_hat[2], lbl_num)
                         # loss_list += [ loss_value, loss_lower, loss_upper ]
                         loss_value = loss_value_func(lbls_hat[3], lbl_num)
-
-
                         loss_list += [ loss_value ]
 
                     if self.has_label_cat and self.regression == False:
-                        # print(preds)
-                        # print(lbl_cat.flatten())
                         loss_categ = loss_categ_func(preds, lbl_cat.flatten())
-                        # print("preds")
-                        # p = torch.sigmoid(preds)
-                        # predicted_class = (p >= 0.5).long()
-                        # print("truth:", lbl_cat.flatten())
-                        # acc_categ = int((predicted_class.flatten() == lbl_cat.flatten()).sum())/len(lbl_cat) #BCE
                         amax = preds.argmax(dim=1)
-                        # print("pred class")
-                        # print(amax)
-                        #print("matches")
-                        #print(amax == lbl_cat.flatten())
                         train_correct += int((amax == lbl_cat.flatten()).sum())
                         train_length += len(amax)
-                        # print("correct:", train_correct)
-                        #print("percent")
-                        # print(acc_categ)
 
                         loss_list += [ loss_categ ]
-                    # loss_combined = torch.stack(loss_list).sum()
                     
-                    if loss_aggregation == 'sum':
-                        loss_combined = torch.stack(loss_list).sum()
-                    elif loss_aggregation == 'geometric':
-                        loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
-                    elif loss_aggregation == 'median':
-                        loss_combined = torch.median(torch.stack(loss_list))
-                    
-                    #https://www.geeksforgeeks.org/machine-learning/l1l2-regularization-in-pytorch/
+            if loss_aggregation == 'sum':
+                loss_combined = torch.stack(loss_list).sum()
+            elif loss_aggregation == 'geometric':
+                loss_combined = torch.exp(torch.mean(torch.log(torch.stack(loss_list))))
+            elif loss_aggregation == 'median':
+                print("loss list", loss_list)
+                loss_combined = torch.median(torch.stack(loss_list))
+            
+            #https://www.geeksforgeeks.org/machine-learning/l1l2-regularization-in-pytorch/
 
-                    if self.regularisation == "L1" or self.regularisation == "L1L2":
-                        l1_lambda = 1e-5
-                        l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
-                        l1_norm = sum(p.abs().sum() for p in self.model.parameters()).item()
-                        # print("loss combined", loss_combined, " l1 norm", l1_norm)
-                        loss_combined = loss_combined + l1_lambda*l1_norm
-                    # https://stackoverflow.com/questions/42704283/l1-l2-regularization-in-pytorch
-                    if self.regularisation == "L2" or self.regularisation == "L1L2":
-                        l2_lambda = 1e-4
-                        l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
-                        loss_combined = loss_combined + l2_lambda*l2_norm
-                        
-
-                    # collect history stats
-                    # if self.has_label_num and self.regression:
-                        # trn_loss_value    += loss_value.item() / num_batches
-                        # trn_loss_lower    += loss_lower.item() / num_batches
-                        # trn_loss_upper    += loss_upper.item() / num_batches
-                        # trn_mse_value     += (torch.mean((lbl_num - lbls_hat[0])**2)).item() / num_batches
-                        # trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[0]))).item() / num_batches
-                        # trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[0])/lbl_num))).item() / num_batches
-                    if self.regression:
-                        trn_mse_value     += (torch.mean((lbl_num - lbls_hat[3])**2)).item() / num_batches
-                        trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[3]))).item() / num_batches
-                        trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[3])/lbl_num))).item() / num_batches
-                        # print("add to train mse", (torch.mean((lbl_num - lbls_hat[3])**2)).item() / num_batches)
-                        # print("lbl", lbl_num)
-                        # print("hat", lbls_hat[3])
-                        # quit()
-                    trn_loss_combined += loss_combined.item() / num_batches
+            if self.regularisation == "L1" or self.regularisation == "L1L2":
+                l1_lambda = 1e-5
+                l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
+                l1_norm = sum(p.abs().sum() for p in self.model.parameters()).item()
+                # print("loss combined", loss_combined, " l1 norm", l1_norm)
+                loss_combined = loss_combined + l1_lambda*l1_norm
+            # https://stackoverflow.com/questions/42704283/l1-l2-regularization-in-pytorch
+            if self.regularisation == "L2" or self.regularisation == "L1L2":
+                l2_lambda = 1e-4
+                l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
+                loss_combined = loss_combined + l2_lambda*l2_norm
                 
-                # backward pass to update gradients
-                #loss_combined.requires_grad = True #KT
+            if self.regression:
+                trn_mse_value     += (torch.mean((lbl_num - lbls_hat[3])**2)).item() / num_batches
+                trn_mae_value     += (torch.mean(torch.abs(lbl_num - lbls_hat[3]))).item() / num_batches
+                trn_mape_value    += 100. * (torch.median(torch.abs((lbl_num - lbls_hat[3])/lbl_num))).item() / num_batches
+            trn_loss_combined += loss_combined.item() / num_batches
+                
 
                 
-                loss_combined.backward()
+            loss_combined.backward()
 
-                # update network parameters
-                if ((j + 1) % accumulation_steps == 0 or (j + 1) == num_batches):
-                    #print("updating optimizer")
-                    optimizer.step()
+            # update network parameters
+            if ((j + 1) % accumulation_steps == 0 or (j + 1) == num_batches):
+                #print("updating optimizer")
+                optimizer.step()
 
 
-                    # reset gradients for tensors
-                    optimizer.zero_grad()
-
-                # self.model.train()
-
-            #scheduler.step()
-            #print(scheduler.get_last_lr())
+                # reset gradients for tensors
+                optimizer.zero_grad()
+            pbar.close()
             if self.regression == False:
                 trn_acc_combined += train_correct / train_length
                 metric_names = ['loss', 'loss_combined', 'accuracy_combined']#, 'accuracy_combined']
@@ -1360,13 +1015,6 @@ class CnnTrainer(Trainer):
             else:
                 metric_names = ['loss', 'loss_combined', 'mse', 'mae', 'mape']#, 'accuracy_combined']
                 train_metric_vals = [ trn_loss_value, trn_loss_combined, trn_mse_value, trn_mae_value, trn_mape_value]
-
-            # print("total correct:", train_correct, " out of ", train_length)
-
-            # train_metric_vals = [ trn_loss_lower, trn_loss_upper, trn_loss_value,
-            #                       trn_loss_combined, trn_mse_value,
-            #                       trn_mae_value, trn_mape_value ] #, trn_acc_combined
-
             trn_losses.append(trn_loss_combined)
 
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t'
@@ -1377,156 +1025,102 @@ class CnnTrainer(Trainer):
 
             self.model.eval()
             with torch.no_grad():
+                correct = 0
+                total_graphs = 0
+                total_val_batches = len(self.val_dataset)*(math.ceil(self.block_size / self.trn_batch_size))
+                pbar = tqdm(total=total_val_batches)
 
-                for k in range(1):
-                    correct = 0
-                    total_graphs = 0
-                    # print("pre val loader")
-                    #for j, (val_phy_dat, val_graph_dat, val_aux_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
-                    for j, (val_graph_dat, val_idx_dat, val_lbl_num, val_lbl_cat) in tqdm(enumerate(val_loader),
-                                                                    total=val_num_batches,
-                                                                    desc=train_msg,
-                                                                    smoothing=0):
-                        
-                        # print("val graph dat:")
-                        # print(val_graph_dat)
-               
-                    #val_phy_dat = val_phy_dat.to(self.TORCH_DEVICE)
-                    #val_aux_dat = val_aux_dat.to(self.TORCH_DEVICE)
-                        val_idx_dat = val_idx_dat.to(self.TORCH_DEVICE)
-                        val_lbl_num = val_lbl_num.to(self.TORCH_DEVICE)
-                        val_lbl_cat = val_lbl_cat.to(self.TORCH_DEVICE)
-                        # print("VALIDATION GRAPH DATA")
-                        # print(val_idx_dat)
-                        # print(val_lbl_num)
-                        # print(val_graph_dat)
-                    #val_graph_dat = val_graph_dat.to(self.TORCH_DEVICE)
-
-                    # reset gradients for tensors
-
-                    # forward pass of training data to estimate labels
+                for j in range(len(self.val_dataset)):
+                    graph_list = self.val_dataset[j]
+                    val_loader = DataListLoader(graph_list, batch_size = self.trn_batch_size)
+                    
+                    for batch in val_loader:
+                        val_lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                        for g in batch:
+                            g.x = util.normalize(g.x, self.attr_msd)
+                            g.lbl_num = util.normalize(g.lbl_num,  self.num_msd)
+                            g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
+                        val_lbl_num = torch.cat([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
 
 
                     # # forward pass of validation to estimate labels
-                        # print("pre val model")
                         try:
-                            val_lbls_hat       = self.model(val_graph_dat)
+                            val_lbls_hat       = self.model(batch)
+                            pbar.update(1)
                         except Exception as e:
                             print("val exception in lbls_hat, j:", j, e)
                             quit()
-                        
-                        #self.model(val_phy_dat, val_graph_dat, val_aux_dat)
 
-
-                        #print("val lbls hat 3")
-                        #print(val_lbls_hat[3])
                         third_arg = val_lbls_hat[3]#[0:int(len(lbls_hat[3])/4)]
-                        # print(" val out:")
-                        # print(third_arg.flatten())
-                        # print(f"Val Output stats - Mean: {third_arg.mean():.4f}, Std: {third_arg.std():.4f}")
-                        # print(f"Val Output range: [{third_arg.min():.4f}, {third_arg.max():.4f}]")
-                        # print(f"Val Unique values: {torch.unique(third_arg).numel()}")
+                        # print("hat third:", val_lbls_hat[3])
                         # collect validation metrics
                         val_loss_list = list()
                         val_loss_value = 0.
                         val_loss_lower = 0.
                         val_loss_upper = 0.
-                        # correct += int((third_arg.argmax(dim=1).flatten() == val_lbl_cat.flatten()).sum())
-                        # total_graphs = total_graphs + len(val_lbl_cat.flatten())
-
+                    
                         if self.has_label_num and self.regression:
-                            # val_loss_value = loss_value_func(val_lbls_hat[0], val_lbl_num).item()
-                            # val_loss_lower = loss_lower_func(val_lbls_hat[1], val_lbl_num).item()
-                            # val_loss_upper = loss_upper_func(val_lbls_hat[2], val_lbl_num).item()
                             val_loss_value = loss_value_func(lbls_hat[3], val_lbl_num).item()
-                            # print("val loss value:",val_loss_value)
                             val_loss_list += [ val_loss_value ] # val_loss_lower, val_loss_upper
 
-                        # val_loss_combined  = val_loss_value + val_loss_lower + val_loss_upper
                         if self.has_label_cat and not self.regression:
-                            # print(third_arg)
-                            # print(val_lbl_cat.flatten())
                             val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten()).item()
                             val_loss_list += [ val_loss_categ ]
 
-                            # print("truth:", lbl_cat.flatten())
-                            if not self.regression:
-                                # p = torch.sigmoid(third_arg)
-                                # predicted_class = (p >= 0.5).long()
-                                predicted_class = third_arg.argmax(dim=1)
-                                # print(third_arg)
-                                # print("predicted class:")
-                                # print(predicted_class)
-                                val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
+                            # if not self.regression:
+                                # predicted_class = third_arg.argmax(dim=1)
+                                # val_acc_combined = int((predicted_class.flatten() == val_lbl_cat.flatten()).sum())/len(val_lbl_cat) #BCE
                             pred_class = third_arg.argmax(dim=1) 
-                            if j % 60 == 0:
-                                # print("pred val:\t\t", pred_class) 
-                                # print("actual labels:\t\t", val_lbl_cat.flatten())
-                                actual_labels = val_lbl_cat.flatten()
-                                selected_labels_1 = actual_labels == 1
-                                selected_labels_0 = actual_labels == 0
-
-                                # print("number correct:\t\t", int((pred_class == val_lbl_cat.flatten()).sum()), "\twhere actual class = 1:", int((pred_class[selected_labels_1] == actual_labels[selected_labels_1]).sum()), "\twhere actual class = 0:", int((pred_class[selected_labels_0] == actual_labels[selected_labels_0]).sum()))
-
-                                # print(pred_class[selected_labels])
-                                # print(actual_labels[selected_labels])
                             val_correct += int((pred_class == val_lbl_cat.flatten()).sum())
-                                # print("correct:", int((pred_class.flatten() == val_lbl_cat.flatten()).sum()))
                             val_length += len(val_lbl_cat)
 
-                        # val_loss_combined = sum(val_loss_list)
-                        if loss_aggregation == 'sum':
-                            # val_loss_combined = torch.stack(val_loss_list).sum()
-                            val_loss_combined = np.sum(val_loss_list)
-                        elif loss_aggregation == 'geometric':
-                            val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
-                            # val_loss_combined = torch.exp(torch.mean(torch.log(torch.stack(val_loss_list))))
-                        elif loss_aggregation == 'median':
-                            # val_loss_combined = torch.median(torch.stack(val_loss_list))
-                            val_loss_combined = np.median(val_loss_list)
-                        l1_norm = 0 #sum(p.abs().sum() for p in self.model.parameters())
-                        l1_lambda = 1e-5
-                        l2_lambda = 1e-4
-                        if self.regularisation == "L1" or self.regularisation == "L1L2":
-                            for p in self.model.parameters():
-                                l1_norm += p.abs().sum()
-                            l1_norm = l1_norm.item()
-                            val_loss_combined = val_loss_combined + l1_lambda*l1_norm
-                        if self.regularisation == "L2" or self.regularisation == "L1L2":
-                            l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
-                            val_loss_combined = val_loss_combined + l2_lambda*l2_norm
-                        val_mse_value = 0.
-                        val_mae_value = 0.
-                        val_mape_value = 0.
-                        if self.has_label_num and self.regression:
-                            val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[3])**2)).item()
-                            val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[3]))).item()
-                            val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[3]) / val_lbl_num))).item()
-                            val_loss_all_batches += val_loss_combined.item() / val_num_batches
-                            val_losses.append(val_loss_all_batches)
-                    if self.regression == False:                  
-                        print("total correct:", val_correct, " out of ", val_length)
-                        # val_acc_combined = val_correct/val_length  
-                        val_metric_vals = [ val_loss_value,
-                                                val_loss_combined, val_acc_combined]
-                        val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
-                        val_losses.append(val_loss_combined)
-                    else:
-                        val_metric_vals = [ val_loss_value, 
-                                                val_loss_combined, val_mse_value, val_mae_value,
-                                                val_mape_value ]
+                if loss_aggregation == 'sum':
+                    val_loss_combined = np.sum(val_loss_list)
+                elif loss_aggregation == 'geometric':
+                    val_loss_combined = np.exp(np.mean(np.log(val_loss_list)))
+                elif loss_aggregation == 'median':
+                    print("val loss list", val_loss_list)
+                    val_loss_combined = np.median(val_loss_list)
+                print("val loss combined initial:", val_loss_combined)
+                l1_norm = 0 
+                l1_lambda = 1e-5
+                l2_lambda = 1e-4
+                if self.regularisation == "L1" or self.regularisation == "L1L2":
+                    for p in self.model.parameters():
+                        l1_norm += p.abs().sum()
+                    l1_norm = l1_norm.item()
+                    val_loss_combined = val_loss_combined + l1_lambda*l1_norm
+                if self.regularisation == "L2" or self.regularisation == "L1L2":
+                    l2_norm = sum(p.square().sum() for p in self.model.parameters()).item()
+                    val_loss_combined = val_loss_combined + l2_lambda*l2_norm
+                val_mse_value = 0.
+                val_mae_value = 0.
+                val_mape_value = 0.
+                
+                if self.has_label_num and self.regression:
+                    val_mse_value      = (torch.mean((val_lbl_num - val_lbls_hat[3])**2)).item()
+                    val_mae_value      = (torch.mean(torch.abs(val_lbl_num - val_lbls_hat[3]))).item()
+                    val_mape_value     = 100. * (torch.median(torch.abs((val_lbl_num - val_lbls_hat[3]) / val_lbl_num))).item()
+                    val_loss_all_batches += val_loss_combined.item() / val_num_batches
+                    print("val loss all batches", val_loss_all_batches)
+                    val_losses.append(val_loss_all_batches)
+                if self.regression == False:              
+                    val_acc_combined = val_correct/val_length    
+                    print("total correct:", val_correct, " out of ", val_length)
+                    val_metric_vals = [ val_loss_value,
+                                            val_loss_combined, val_acc_combined]
+                    val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc_combined)}'
+                    print("val loss combined:", val_loss_combined)
+                    val_losses.append(val_loss_combined)
+                else:
+                    val_metric_vals = [ val_loss_value, 
+                                            val_loss_combined, val_mse_value, val_mae_value,
+                                            val_mape_value ]
 
+                pbar.close()
+                val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
+        
 
-                    # acc = correct/(total_graphs)
-                    # print("correct: ", str(correct), "graphs: ", str(total_graphs), "accuracy: ", str(acc))
-                # raw training metrics for epoch
-                    # val_loss_combined = val_metric_vals
-                    val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t'
-
-            
-            #scheduler.step(val_loss_combined)
-            #current_lr = optimizer.param_groups[0]['lr']
-            #print(f"LR: {current_lr:.6f}")
 
             # changes in training metrics between epochs
                 if self.regression:
@@ -1634,6 +1228,7 @@ class CnnTrainer(Trainer):
                     print(val_loss_str, val_acc_str)
                     print('')
 
+    
                 # for name, param in self.model.named_parameters():
                 #     if param.requires_grad:
                 #         print(f"{name}: mean={param.data.mean():.4f}, std={param.data.std():.4f}")
@@ -1700,37 +1295,28 @@ class CnnTrainer(Trainer):
 
         # make initial CPI estimates
 
-        calib_loader = DataLoader(dataset=self.calib_dataset,
-                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_calib_examples)
-
-        for step, data in enumerate(calib_loader):
-            print(f'Calib step {step + 1}:')
-            print()
-        calib_batch = next(iter(calib_loader))
-        calib_graph_dat, calib_idx_dat, calib_lbl_num, calib_lbl_cat = calib_batch
-        #calib_phy_dat, calib_graph_dat, calib_aux_dat = calib_batch[0], calib_batch[1], calib_batch[2], third_arg
-
-        # calib_phy_dat = calib_phy_dat.to('cpu')
-        # calib_aux_dat = calib_aux_dat.to('cpu')
-        
-        # get calib estimates
-        print("----------------\ncalib est\n\n")
-
-        #calib_label_est = self.model(calib_phy_dat, calib_graph_dat, calib_aux_dat)
+        for k in range(len(self.cal_dataset)):
+            graph_list = self.cal_dataset[k]
+            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
+            for step, data in enumerate(loader):
+                print(f'Calib step {step + 1}:')
+                print()
+        calib_batch = next(iter(loader))
         try:
-            calib_label_est = self.model(calib_graph_dat)
+            calib_label_est = self.model(calib_batch)
         except Exception as e:
             print("calib exception", e)
             quit()
 
         # make CPI adjustments
-        norm_calib_label_num_est = torch.stack(calib_label_est[0:3]).cpu().detach().numpy()
-        norm_calib_num_est_quantiles = norm_calib_label_num_est[1:,:,:]
-        self.cpi_adjustments = self.get_cqr_constant(norm_calib_num_est_quantiles,
-                                                     self.norm_calib_labels_num,
-                                                     inner_quantile=self.cpi_coverage,
-                                                     asymmetric=self.cpi_asymmetric)
-        self.cpi_adjustments = np.array(self.cpi_adjustments).reshape((2,-1))
+        if self.regression:
+            norm_calib_label_num_est = torch.stack(calib_label_est[0:3]).cpu().detach().numpy()
+            norm_calib_num_est_quantiles = norm_calib_label_num_est[1:,:,:]
+            self.cpi_adjustments = self.get_cqr_constant(norm_calib_num_est_quantiles,
+                                                        self.norm_calib_labels_num,
+                                                        inner_quantile=self.cpi_coverage,
+                                                        asymmetric=self.cpi_asymmetric)
+            self.cpi_adjustments = np.array(self.cpi_adjustments).reshape((2,-1))
 
         # restore device
         # if self.use_cuda:
@@ -1748,104 +1334,84 @@ class CnnTrainer(Trainer):
 
         """
 
-        print("make results function")
         
         # get uncalibrated estimates
         # training label estimates
-        print("dataset length", len(self.train_dataset))
-        train_loader = DataLoader(dataset=self.train_dataset,
-                                                   batch_size=self.trn_batch_size, collate_fn = custom_collate)#num_train_examples)
+        first_batch = True
+        pbar = tqdm(total=self.total_batches)
+        for j in range(len(self.train_dataset)):
+            graph_list = self.train_dataset[j]
+            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
 
-        # for step, data in enumerate(train_loader):
-        #     print(f'Train step {step + 1}:')
-        #     #print(data)
-                                      
+            for batch in loader:
+                pbar.update(1)
+                # batch = batch.to(self.TORCH_DEVICE)
+                train_labels_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                train_labels_num = torch.cat([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
 
-        #train_batch = next(iter(train_loader))
-        # for j, (graph_dat, idx_dat, lbl_num, lbl_cat) in tqdm(enumerate(train_loader),
-        for j, (train_graph_dat, train_idx_dat, train_labels_num, train_labels_cat) in enumerate(train_loader):
-            # print("j = ", j)
+                label_est = self.model(batch)
+                labels_num_est = label_est[0:3]
+                labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
+                labels_cat_est = label_est[3]
 
-            # get train estimates
-
-            #train_phy_dat = train_phy_dat.to(self.TORCH_DEVICE)
-            #train_aux_dat = train_aux_dat.to(self.TORCH_DEVICE)
-            train_labels_num = train_labels_num.to(self.TORCH_DEVICE)
-            train_labels_cat = train_labels_cat.to(self.TORCH_DEVICE)
-            #train_graph_dat = train_graph_dat.to(self.TORCH_DEVICE)
-
-            #train_nodes_dat = [z.to(self.TORCH_DEVICE) for z in train_nodes_dat]
-            #train_edges_dat = [[[z.to(self.TORCH_DEVICE) for z in y] for y in x] for x in train_edges_dat]
-            # NOTE: train_idx[0:1000] will be equal to self.train_label_index[0:1000,:]
-            #       because DataLoader batches are indexed in same order
-            
-            # get train estimates
-            label_est = self.model(train_graph_dat)
-            #label_est = self.model(train_phy_dat, train_graph_dat, train_aux_dat)
-
-        
-            # numerical vs. cat estimates
-            labels_num_est = label_est[0:3]
-            labels_num_est = torch.stack(labels_num_est).cpu().detach().numpy()
-            labels_cat_est = label_est[3]
-
-
-
-            if self.has_label_num:
-                train_labels_num = train_labels_num.cpu().detach().numpy()
-                if j == 0:
-                    self.train_label_num_true = train_labels_num.copy()
-                else:
-                    self.train_label_num_true = np.append(self.train_label_num_true, train_labels_num)
+                if self.has_label_num:
+                    train_labels_num = train_labels_num.cpu().detach().numpy()
+                    if j == 0 and first_batch:
+                        self.train_label_num_true = train_labels_num.copy()
+                    else:
+                        self.train_label_num_true = np.append(self.train_label_num_true, train_labels_num)
+                    
+                    # uncalibrated training estimates of numerical labels
+                    # self.train_label_num_est = labels_num_est.copy()
+                    if j == 0 and first_batch:
+                        self.train_label_num_est = labels_num_est
+                    else:
+                        self.train_label_num_est = np.append(self.train_label_num_est, labels_num_est)
+                    # self.train_label_num_est = util.denormalize(labels_num_est.copy(),
+                    #                                             self.train_labels_num_mean_sd)
                 
-                # uncalibrated training estimates of numerical labels
-                # self.train_label_num_est = labels_num_est.copy()
-                if j == 0:
-                    self.train_label_num_est = labels_num_est
-                else:
-                    self.train_label_num_est = np.append(self.train_label_num_est, labels_num_est)
-                # self.train_label_num_est = util.denormalize(labels_num_est.copy(),
-                #                                             self.train_labels_num_mean_sd)
-                
+
 
                 # generate calibration factors
 
-            if self.has_label_cat:
-                train_label_cat = train_labels_cat.cpu().detach().numpy().astype('int')
-                if j == 0:
-                    # print("j =", j, "cat true is none")
-                    self.train_label_cat_true = train_label_cat.copy()
+                if self.has_label_cat:
+                    train_label_cat = train_labels_cat.cpu().detach().numpy().astype('int')
+                    if j == 0 and first_batch:
+                        # print("j =", j, "cat true is none")
+                        self.train_label_cat_true = train_label_cat.copy()
+                    else:
+                        self.train_label_cat_true = np.append(self.train_label_cat_true, train_label_cat)
+                    # print("UPDATE:")
+                    # print(self.train_label_cat_true )
+                    if j == 0 and first_batch:
+                        self.train_label_cat_est = labels_cat_est.argmax(dim=1).cpu().detach().numpy()
+                    else:
+                        self.train_label_cat_est = np.append(self.train_label_cat_est, labels_cat_est.argmax(dim=1).cpu().detach().numpy())
+                    total_correct = (self.train_label_cat_true == self.train_label_cat_est).sum()
+                    # print("accuracy:")
+                    # print(total_correct/len(self.train_label_cat_true))
                 else:
-                    self.train_label_cat_true = np.append(self.train_label_cat_true, train_label_cat)
-                # print("UPDATE:")
-                # print(self.train_label_cat_true )
-                if j == 0:
-                    self.train_label_cat_est = labels_cat_est.argmax(dim=1).cpu().detach().numpy()
-                else:
-                    self.train_label_cat_est = np.append(self.train_label_cat_est, labels_cat_est.argmax(dim=1).cpu().detach().numpy())
-                total_correct = (self.train_label_cat_true == self.train_label_cat_est).sum()
-                # print("accuracy:")
-                # print(total_correct/len(self.train_label_cat_true))
-            else:
-                print("no label cat")
-        self.perform_cpi_calibration()
+                    print("no label cat")
+                first_batch = False
+            if self.regression:
+                self.perform_cpi_calibration()
 
             # calibrate original estimates
-        if self.has_label_num:    
-            labels_num_est_calib = self.train_label_num_est.copy()
-            labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
-            labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
-            
+
+            if self.has_label_num and self.regression:    
+                labels_num_est_calib = self.train_label_num_est.copy()
+                labels_num_est_calib[1,:,:] = labels_num_est_calib[1,:,:] + self.cpi_adjustments[0,:]
+                labels_num_est_calib[2,:,:] = labels_num_est_calib[2,:,:] + self.cpi_adjustments[1,:]
         # # denormalize calibrated estimates
         # if self.train_label_num_est_calib == None:
-            self.train_label_num_est_calib = labels_num_est_calib
+                self.train_label_num_est_calib = labels_num_est_calib
+        pbar.close()   
+
         # else:
         #     self.train_label_num_est_calib = np.append(self.train_label_num_true, labels_num_est_calib)
         # self.train_label_num_est_calib = labels_num_est_calib
 
         # reformat categorical estimates, if they exist
-        
-        print("returning from make results")
         return
 
     def format_label_cat(self, x):
@@ -1895,7 +1461,8 @@ class CnnTrainer(Trainer):
         train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_cat.csv'
         
         # save model to file
-        torch.save(self.model.module, model_arch_fn)
+        model_to_save = self.model.module if hasattr(self.model, "module") else self.model
+        torch.save(model_to_save, model_arch_fn)
         write_mode = 'w'
 
 
@@ -1915,7 +1482,7 @@ class CnnTrainer(Trainer):
         # print("df_train_label_idx")
         # print(df_train_label_idx)
  
-        if self.has_label_num:
+        if self.has_label_num and self.regression:
             # save label names, means, sd for new test dataset normalization
             df_labels = pd.DataFrame({'name':self.param_num_names,
                                       'mean':self.train_labels_num_mean_sd[0],
@@ -1973,6 +1540,8 @@ class CnnTrainer(Trainer):
     
         if self.has_label_cat:
             # save true values for train categ. labels
+            print("end", self.train_label_cat_true)
+            print(self.param_cat_names)
             df_train_label_cat_true = pd.DataFrame(self.train_label_cat_true,
                                                    columns=self.param_cat_names )
             df_train_label_cat_true = pd.concat([df_train_label_idx, df_train_label_cat_true], axis=1 )

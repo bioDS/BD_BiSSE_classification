@@ -171,6 +171,8 @@ def settings_registry():
         'save_phyenc_csv':     {'step': 'F',     'type': str,   'section': 'Format',  'default': 'F',             'help': 'Save encoded phylogenetic tensor encoding to csv?', 'bool': True},
         'save_graph_csv':       {'step':'F', 'type':str, 'section':'Format', 'default':'F',                     'help': 'Save graph encoding', 'bool': True},
         'select_classes':       {'step':'F', 'type': list,  'section':'Format', 'default': [0,1,2,3],           'help':  'Categorical classes to use for encoding if not all'},
+        'regression':       {'step':'TEP', 'type' : bool, 'section':'Train', 'default':False, 'help':'Whether to predict diversifcation rates instead of classification'},
+        'aux_data':         {'step':'FTEP', 'type': list, 'section':'Format', 'default':[], 'help':'aux data labels, this option needs to be set manually and code should be updated to automate this'},
 
         # training options
         'network_type':         {'step':'TEP',      'type': str,    'section':'Train', 'default':'CNN',             'help': 'CNN or GNN architecture'},
@@ -2059,14 +2061,28 @@ def normalize(data, m_sd=None):
     Returns:
         numpy.ndarray: The normalized data.
     """
-    if type(m_sd) is type(None):
+
+    if m_sd is None:
         m = data.mean(axis=0)
         sd = data.std(axis=0)
-        sd[np.where(sd == 0)] = 1
+        sd = sd.clone()
+        if sd.ndim == 0:
+            if sd == 0:
+                sd = torch.tensor(1.0, device=data.device)
+        else:
+            sd[sd == 0] = 1
+        
         return (data - m) / sd, m, sd
     else:
-        m_sd[1][np.where(m_sd[1] == 0)] = 1
-        return (data - m_sd[0]) / m_sd[1]
+        m, sd = m_sd
+        m = m.to(data.device)
+        sd = sd.to(data.device).clone()
+        if sd.ndim == 0:
+            if sd == 0:
+                sd = torch.tensor(1.0, device=data.device)
+        else:
+            sd[sd == 0] = 1
+        return (data - m) / sd
 
 
 def denormalize(data, m_sd, exp=False, tol=300):
