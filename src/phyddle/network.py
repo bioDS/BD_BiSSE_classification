@@ -61,13 +61,16 @@ def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
     return out, num_nodes
 
 class GCN_PhyloPool(torch.nn.Module):
-    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda):
+    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda, regression):
         super(GCN_PhyloPool, self).__init__()
         torch.manual_seed(12345)
         self.n_parts = 20
         ker_size = 5
         heads = 1
-        num_classes = 2
+        if regression:
+            num_outs = 4
+        else:
+            num_outs = 2
         self.gconv1 = GCNConv(num_node_features, hidden_channels) #GCNConv #  heads=heads
         self.gconv2 = GCNConv(hidden_channels*heads, hidden_channels*heads) #  heads=heads
         self.conv1 = nn.Conv1d(hidden_channels*heads*heads, 2*hidden_channels*heads*heads, kernel_size=ker_size)
@@ -84,7 +87,7 @@ class GCN_PhyloPool(torch.nn.Module):
         # self.bn4 = BatchNorm(2*hidden_channels)
 
         self.lin1 = nn.Linear(8*hidden_channels*self.n_parts*heads*heads, out_features = 100)
-        self.lin2 = nn.Linear(100, num_classes)
+        self.lin2 = nn.Linear(100, num_outs)
 
         self.TORCH_DEVICE_STR = (
             "cuda"
@@ -98,12 +101,14 @@ class GCN_PhyloPool(torch.nn.Module):
         edge_index = edge_index.to(self.TORCH_DEVICE)
         batch = batch.to(self.TORCH_DEVICE)
         batch_size = batch.max().item() + 1
+        # print("edge index: ", edge_index)
+        # print("x shape: ", x.shape, "edge index shape: ", edge_index.shape)
         x = self.gconv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        #x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
         x = self.gconv2(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        #x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
         x, num_nodes = to_dense_batch(x, batch)
         x_padded = x.permute(0,2,1)
         x_padded = self.conv1(x_padded)
@@ -147,9 +152,9 @@ class GCN_PhyloPool(torch.nn.Module):
         selected_nodes = selected_nodes.permute(0,2,1)
         selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
         out = F.relu(self.lin1(selected_nodes_flattened))
-        out = F.dropout(out, p=0.01, training=self.training)
+        out = F.dropout(out, p=0.5, training=self.training)
         out = self.lin2(out)
-
+        # print("out:", out)
         return out
 
 # https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
@@ -247,103 +252,103 @@ class GCN(torch.nn.Module):
 
 
 
-class Dataset(Geoset):
-    """
-    Dataset class for training. It is used by torch.utils.data.DataLoader to
-    generate training batches for the training loop. Training examples include
-    phylogenetic-state tensors, auxiliary data tensors, and labels.
-    """
-    # Constructor
-    def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
-        # quit()
-        self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
-        self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
-        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
-        self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
+# class Dataset(Geoset):
+#     """
+#     Dataset class for training. It is used by torch.utils.data.DataLoader to
+#     generate training batches for the training loop. Training examples include
+#     phylogenetic-state tensors, auxiliary data tensors, and labels.
+#     """
+#     # Constructor
+#     def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
+#         # quit()
+#         self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
+#         self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
+#         self.idx_data    = torch.from_numpy(idx_data.astype('int'))
+#         self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
 
-        self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
-        self.len         = len(self.labels_num) #self.labels_num.shape[0]
+#         self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
+#         self.len         = len(self.labels_num) #self.labels_num.shape[0]
 
-        edges_data = torch.from_numpy(edges_data.astype('int'))
-        if (isinstance(node_data, np.ndarray)):
-            node_data = torch.from_numpy(np.transpose(node_data.astype('float32')))
+#         edges_data = torch.from_numpy(edges_data.astype('int'))
+#         if (isinstance(node_data, np.ndarray)):
+#             node_data = torch.from_numpy(np.transpose(node_data.astype('float32')))
 
-        min_index =   edges_data.min()
-        edges_data = torch.sub(edges_data, min_index)
-        unique = torch.unique(edges_data)
-        all = torch.arange(edges_data.max()+1)
-        difference = all[torch.isin(all, unique, invert=True)]
-        reduction = torch.searchsorted(difference, all, right=False)
-        edges_data=  torch.sub(edges_data, reduction[edges_data])
-        self.graph_dat = []
-        self.id_list = graph_ids
-        i = 0
-        num_nodes = num_nodes.astype(np.int64)
-        num_edges = num_edges.astype(np.int64)
-        if num_nodes[0] != num_edges[0] + 1:
-            print("nodes:", num_nodes)
-            print("edges:", num_edges)
-            quit()
-        prev_edge_ind = 0
-        prev_node_ind = 0
+#         min_index =   edges_data.min()
+#         edges_data = torch.sub(edges_data, min_index)
+#         unique = torch.unique(edges_data)
+#         all = torch.arange(edges_data.max()+1)
+#         difference = all[torch.isin(all, unique, invert=True)]
+#         reduction = torch.searchsorted(difference, all, right=False)
+#         edges_data=  torch.sub(edges_data, reduction[edges_data])
+#         self.graph_dat = []
+#         self.id_list = graph_ids
+#         i = 0
+#         num_nodes = num_nodes.astype(np.int64)
+#         num_edges = num_edges.astype(np.int64)
+#         if num_nodes[0] != num_edges[0] + 1:
+#             print("nodes:", num_nodes)
+#             print("edges:", num_edges)
+#             quit()
+#         prev_edge_ind = 0
+#         prev_node_ind = 0
 
-        # print("LABELS NUM in network")
-        # print(self.labels_num)
-        # print(self.labels_num.shape)
+#         # print("LABELS NUM in network")
+#         # print(self.labels_num)
+#         # print(self.labels_num.shape)
 
-        for i in range(len(graph_ids)):
-            current_edge_ind = prev_edge_ind + num_edges[i].astype(np.int64)[0]
-            current_node_ind = prev_node_ind + num_nodes[i].astype(np.int64)[0]
+#         for i in range(len(graph_ids)):
+#             current_edge_ind = prev_edge_ind + num_edges[i].astype(np.int64)[0]
+#             current_node_ind = prev_node_ind + num_nodes[i].astype(np.int64)[0]
 
-            selected_nodes = node_data[:,prev_node_ind:current_node_ind]
-            # print("selected node shape")
-            # print(selected_nodes.shape)
-            # print("prev ind", prev_node_ind, "current ind", current_node_ind)
-            # print("i = ", i, "selected attr", selected_nodes)
-            selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
+#             selected_nodes = node_data[:,prev_node_ind:current_node_ind]
+#             # print("selected node shape")
+#             # print(selected_nodes.shape)
+#             # print("prev ind", prev_node_ind, "current ind", current_node_ind)
+#             # print("i = ", i, "selected attr", selected_nodes)
+#             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
         
-            # print("node shape")
-            # print(selected_nodes.shape)
-            # print("edge shape")
-            # print(selected_edges.shape)
-            if (selected_nodes.shape[1] != selected_edges.shape[1] + 1):
-                print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
+#             # print("node shape")
+#             # print(selected_nodes.shape)
+#             # print("edge shape")
+#             # print(selected_edges.shape)
+#             if (selected_nodes.shape[1] != selected_edges.shape[1] + 1):
+#                 print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
 
-                print("MISMATCH!!!!")
+#                 print("MISMATCH!!!!")
                 
-                print(selected_nodes)
-                print(selected_edges)
-                print("num nodes: ", num_nodes[i])
-                print("num edges:", num_edges[i])
-                print("total num nodes", np.sum(num_nodes, dtype=np.int64))
-                print("total num edges", np.sum(num_edges, dtype=np.int64))
-                print(graph_ids[i])
-                print("total length node data", len(node_data[1]))
-                print("total length edge data", len(edges_data[1]))
-                print("current node index:", current_node_ind, "current edge index", current_edge_ind)
-                print("total number of graph ids:", len(graph_ids))
-                print("total number of num_edges:", len(num_edges))
-                print("total number of num nodes:", len(num_nodes))
-                quit()
-            #self.graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
-            self.graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
-            # print(is_undirected(selected_edges))
-            # quit()
-            prev_edge_ind = current_edge_ind
-            prev_node_ind = current_node_ind
-        # print("self graph dat")
-        # print(self.graph_dat)
+#                 print(selected_nodes)
+#                 print(selected_edges)
+#                 print("num nodes: ", num_nodes[i])
+#                 print("num edges:", num_edges[i])
+#                 print("total num nodes", np.sum(num_nodes, dtype=np.int64))
+#                 print("total num edges", np.sum(num_edges, dtype=np.int64))
+#                 print(graph_ids[i])
+#                 print("total length node data", len(node_data[1]))
+#                 print("total length edge data", len(edges_data[1]))
+#                 print("current node index:", current_node_ind, "current edge index", current_edge_ind)
+#                 print("total number of graph ids:", len(graph_ids))
+#                 print("total number of num_edges:", len(num_edges))
+#                 print("total number of num nodes:", len(num_nodes))
+#                 quit()
+#             #self.graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+#             self.graph_dat.append(GeoData(x=torch.transpose(selected_nodes, 0, 1), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
+#             # print(is_undirected(selected_edges))
+#             # quit()
+#             prev_edge_ind = current_edge_ind
+#             prev_node_ind = current_node_ind
+#         # print("self graph dat")
+#         # print(self.graph_dat)
 
-    # Getting the data
-    def __getitem__(self, index):
-        # return(self.graph_dat[index], self.idx_data[index],
-        #         self.labels_num[index], self.labels_num[index])
-        return(self.graph_dat[index], self.idx_data[index],
-                self.labels_num[index], self.labels_cat[index])
+#     # Getting the data
+#     def __getitem__(self, index):
+#         # return(self.graph_dat[index], self.idx_data[index],
+#         #         self.labels_num[index], self.labels_num[index])
+#         return(self.graph_dat[index], self.idx_data[index],
+#                 self.labels_num[index], self.labels_cat[index])
     
-    # Getting length of the data
-    def __len__(self):
-        return self.len
+#     # Getting length of the data
+#     def __len__(self):
+#         return self.len
 
 ##################################################
 
@@ -396,6 +401,7 @@ class ParameterEstimationNetwork(nn.Module):
         self.activation_func        = args['activation_func']
         self.use_cuda               = args['use_cuda']
         self.point_ffnn = []
+        self.regression = bool(args['regression'])
 
         self.TORCH_DEVICE_STR = (
             "cuda"
@@ -533,7 +539,7 @@ class ParameterEstimationNetwork(nn.Module):
             # self.phy_std.append(nn.Linear(2*self.phy_std_hidden_size, self.phy_std_hidden_size))
             # self.phy_std.append(nn.Linear(self.phy_std_hidden_size, num_classes))    
             if (self.phylo_pool):
-                self.phy_std = GCN_PhyloPool(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, use_cuda = self.use_cuda)
+                self.phy_std = GCN_PhyloPool(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, use_cuda = self.use_cuda, regression=self.regression)
             else:
                 self.phy_std = GCN(num_node_features = num_node_features, hidden_channels = self.phy_std_hidden_size, num_classes = num_classes, graph_conv = graph_conv, use_cuda = self.use_cuda)
 
@@ -611,9 +617,7 @@ class ParameterEstimationNetwork(nn.Module):
             # if graph_dat.batch is None:
             #     graph_dat.batch = graph_dat.x.new_zeros(graph_dat.x.size(0), dtype=torch.long)
 
-            #print("data.edge_index")
-            #print(graph_dat.edge_index)
-
+            # print("data.edge_index", graph_dat.edge_index.shape, "data.nodes", graph_dat.x.shape)
             # norm_features = (graph_dat.x - 0.5)*2 # might need this back
             # print("norm features")
             # print(norm_features.flatten())
@@ -678,6 +682,29 @@ class ParameterEstimationNetwork(nn.Module):
 ##################################################
 
 
+# class ParameterToClassNetwork(nn.Module):
+#     def __init__(self):
+#         super(ParameterToClassNetwork, self).__init__()
+#         self.TORCH_DEVICE_STR = (
+#             "cuda"
+#             if torch.cuda.is_available() and self.use_cuda
+#             else "cpu"
+#         )
+#         self.TORCH_DEVICE = torch.device(self.TORCH_DEVICE_STR)
+#         self.layers = nn.Sequential(nn.Linear(4,16),
+#                         F.relu(), 
+#                         nn.linear(16, 16), 
+#                         F.relu(), 
+#                         nn.linear(16, 8),
+#                         F.relu(),
+#                         nn.linear(8,2),
+#                         )
+
+#         def forward(self, x):
+#             x = self.flatten(x)
+#             return self.layers(x)
+
+
 class QuantileLoss(nn.Module):
     """
     Quantile loss function. This function uses an asymmetric quantile
@@ -718,28 +745,20 @@ class CrossEntropyLoss(nn.Module):
         
         loss_list = []
         targets = targets.flatten().long() #.long()
-        # print("targets:")
-        # print(targets)
         predictions = predictions.float()
         weights = 1 / torch.bincount(targets).float()
-        # print("weights:", weights)
         weight_tensor = targets.clone().float()
         
         if len(weight_tensor) < 2 or min(weight_tensor) == 0: #< 4
+            # print("no weighting")
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
         else:
+            # print("weighting")
             weight_tensor[weight_tensor == 0] = weights[0]
-            weight_tensor[weight_tensor == 1] = weights[1]
-            # weight_tensor[weight_tensor == 2] = weights[2]
-            # weight_tensor[weight_tensor == 3] = weights[3]
-        #targets = targets.float()
+            weight_tensor[weight_tensor == 1] = weights[1]            
             weight_tensor = weight_tensor.flatten().unsqueeze(1)   
             loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
         targets  = targets.unsqueeze(1)
-        # print("preds:")
-        # print(predictions)
-        # print("targets")
-        # print(targets.flatten())
         loss_list = [loss_func(predictions, targets.flatten())]  
         # print("loss list:")
         # print(loss_list)
