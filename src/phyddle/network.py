@@ -42,7 +42,7 @@ def get_valid_node_indices(initial_num_nodes):
         valid_node_count = (valid_node_count - (ker_size//2)-(ker_size//2)) // pooling_factor
     return valid_node_count
 
-def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
+def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=5000):
     if batch is None and max_num_nodes is None:
         mask = torch.ones(1, x.size(0), dtype=torch.bool, device=x.device)
         return x.unsqueeze(0), mask
@@ -71,11 +71,17 @@ class GCN_PhyloPool(torch.nn.Module):
             num_outs = 4
         else:
             num_outs = 2
-        self.gconv1 = GCNConv(num_node_features, hidden_channels) #GCNConv #  heads=heads
-        self.gconv2 = GCNConv(hidden_channels*heads, hidden_channels*heads) #  heads=heads
-        self.conv1 = nn.Conv1d(hidden_channels*heads*heads, 2*hidden_channels*heads*heads, kernel_size=ker_size)
-        self.conv2= nn.Conv1d(2*hidden_channels*heads*heads, 4*hidden_channels*heads*heads, kernel_size=ker_size)
-        self.conv3= nn.Conv1d(4*hidden_channels*heads*heads, 8*hidden_channels*heads*heads, kernel_size=ker_size)
+        self.gconv1 = GCNConv(num_node_features, 2*hidden_channels) #GCNConv #  heads=heads
+        self.gconv2 = GCNConv(2*hidden_channels*heads, 4*hidden_channels*heads) #  heads=heads
+        self.gconv3 = GCNConv(4*hidden_channels*heads, 8*hidden_channels*heads) #  heads=heads
+        self.gconv4 = GCNConv(8*hidden_channels*heads, 16*hidden_channels*heads) #  heads=heads
+        self.fc1  = torch.nn.Linear(16*hidden_channels, 4*hidden_channels)
+        self.fc2  = torch.nn.Linear(4*hidden_channels, num_classes)
+        self.dropout = nn.Dropout(p=0.01) # Utilisez nn.Dropout au lieu de p_dropout
+
+        # self.conv1 = nn.Conv1d(hidden_channels*heads*heads, 2*hidden_channels*heads*heads, kernel_size=ker_size) # 1, *2
+        # self.conv2= nn.Conv1d(2*hidden_channels*heads*heads, 4*hidden_channels*heads*heads, kernel_size=ker_size) # 2, 4
+        # self.conv3= nn.Conv1d(4*hidden_channels*heads*heads, 8*hidden_channels*heads*heads, kernel_size=ker_size) # 4, 8
         # self.message_passing_layers = nn.ModuleList()
         # self.message_passing_layers.append(self.gconv1)
         # self.message_passing_layers.append(self.gconv2)
@@ -86,8 +92,8 @@ class GCN_PhyloPool(torch.nn.Module):
         # self.bn3 = BatchNorm(hidden_channels)
         # self.bn4 = BatchNorm(2*hidden_channels)
 
-        self.lin1 = nn.Linear(8*hidden_channels*self.n_parts*heads*heads, out_features = 100)
-        self.lin2 = nn.Linear(100, num_outs)
+        # self.lin1 = nn.Linear(8*hidden_channels*self.n_parts*heads*heads, out_features = 100) 
+        # self.lin2 = nn.Linear(100, num_outs)
 
         self.TORCH_DEVICE_STR = (
             "cuda"
@@ -104,58 +110,96 @@ class GCN_PhyloPool(torch.nn.Module):
         # print("edge index: ", edge_index)
         # print("x shape: ", x.shape, "edge index shape: ", edge_index.shape)
         x = self.gconv1(x, edge_index)
-        x = F.relu(x)
-        #x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
-        x = self.gconv2(x, edge_index)
-        x = F.relu(x)
-        #x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
-        x, num_nodes = to_dense_batch(x, batch)
-        x_padded = x.permute(0,2,1)
-        x_padded = self.conv1(x_padded)
-        x_padded = F.relu(x_padded)
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
-        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
-        x_padded = self.conv2(x_padded)
-        x_padded = F.relu(x_padded)
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
-        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
-
-        x_padded = self.conv3(x_padded)
-        x_padded = F.relu(x_padded) 
-        x_padded = F.dropout(x_padded, p=0.01, training=self.training)   # p = 0.01
-        x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
-     
-
-
+        x = F.relu(x) #relu
         x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
-        valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
-        selected_nodes_list = []
-        for i, valid in enumerate (valid_nodes):
-            valid_indices = torch.arange(valid) # Generate valid node indices
-            base_size = valid // self.n_parts # Base size of each part
-            remainder = valid % self.n_parts # Number of remaining indices to distribute
+        x = self.gconv2(x, edge_index)
+        x = F.relu(x) #relu
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = self.gconv3(x, edge_index)
+        x = F.relu(x) #relu
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = self.gconv4(x, edge_index)
+        x = F.relu(x) #relu
+        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = global_mean_pool(x, batch)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        # print("mean", x.std(dim=0).mean())
+        # print("max", x.std(dim=0).max())
+        # print(x[:5])
+        return  x
+        # # x, num_nodes = to_dense_batch(x, batch)
+        # # print("after dense:", x.shape)
 
-            # Calculate the sizes of the parts
-            part_sizes = [base_size + 1 if j < remainder else base_size for j in range(self.n_parts)]
-            part_means = []
-            start_idx = 0
+        # # x_padded = x.permute(0,2,1)
+        # x_padded = self.conv1(x_padded)
+        # print("before conv:", x_padded.shape)
 
-            for part_size in part_sizes:
-                end_idx = start_idx + part_size
-                part_indices = valid_indices[start_idx:end_idx]
-                start_idx = end_idx
-                part_mean = x_padded[i, :, part_indices].mean(dim=1)
-                part_means.append(part_mean)
-            selected_nodes_list.append(torch.stack(part_means))
+        # x_padded = F.relu(x_padded)
+        # x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
+        # # x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
+        # # print("after pool1:", x_padded.shape)
+
+        # x_padded = self.conv2(x_padded)
+        # print("after conv2:", x_padded.shape)
+
+        # x_padded = F.relu(x_padded)
+        # x_padded = F.dropout(x_padded, p=0.01, training=self.training) # p = 0.01
+        # # x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
+        # # print("after pool2:", x_padded.shape)
+
+        # x_padded = self.conv3(x_padded)
+        # x_padded = F.relu(x_padded) 
+        # x_padded = F.dropout(x_padded, p=0.01, training=self.training)   # p = 0.01
+        # # x_padded = F.avg_pool1d(x_padded, kernel_size = 2)
+        # # print("after pool3:", x_padded.shape)
+
+        # # print("num_nodes:", num_nodes)
+        # # print(
+        # #     "valid_nodes:",
+        # #     [get_valid_node_indices(n.item()) for n in num_nodes]
+        # # )
+        # # quit()
+        # # # print("graph embedding:")
+        # # # print("shape:", x_padded.shape)
+        # # # print("mean:", x_padded.mean().item())
+        # # # print("std:", x_padded.std().item())
+        # # # print("min:", x_padded.min().item())
+        # # # print("max:", x_padded.max().item())
+        # # # print(x_padded[:5])
+
+        # # x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        # # valid_nodes = [get_valid_node_indices(n.item()) for n in num_nodes]
+        # # print("valid nodes:", valid_nodes)
+        # # selected_nodes_list = []
+        # # for i, valid in enumerate (valid_nodes):
+        # #     valid_indices = torch.arange(valid) # Generate valid node indices
+        # #     base_size = valid // self.n_parts # Base size of each part
+        # #     remainder = valid % self.n_parts # Number of remaining indices to distribute
+
+        # #     # Calculate the sizes of the parts
+        # #     part_sizes = [base_size + 1 if j < remainder else base_size for j in range(self.n_parts)]
+        # #     part_means = []
+        # #     start_idx = 0
+
+        # #     for part_size in part_sizes:
+        # #         end_idx = start_idx + part_size
+        # #         part_indices = valid_indices[start_idx:end_idx]
+        # #         start_idx = end_idx
+        # #         part_mean = x_padded[i, :, part_indices].mean(dim=1)
+        # #         part_means.append(part_mean)
+        # #     selected_nodes_list.append(torch.stack(part_means))
         
-        selected_nodes = torch.stack(selected_nodes_list)
-        selected_nodes = selected_nodes.permute(0,2,1)
-        selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
-        out = F.relu(self.lin1(selected_nodes_flattened))
-        out = F.dropout(out, p=0.5, training=self.training)
-        out = self.lin2(out)
-        # print("out:", out)
-        return out
+        # # selected_nodes = torch.stack(selected_nodes_list)
+        # # selected_nodes = selected_nodes.permute(0,2,1)
+        # # selected_nodes_flattened = selected_nodes.reshape(batch_size, -1)
+
+
+        # out = F.leaky_relu(self.lin1(selected_nodes_flattened)) #relu
+        # out = F.dropout(out, p=0.5, training=self.training)
+        # out = self.lin2(out)
+        # # print("out:", out)
+        # return out
 
 # https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
 class GCN(torch.nn.Module):
@@ -746,21 +790,18 @@ class CrossEntropyLoss(nn.Module):
         loss_list = []
         targets = targets.flatten().long() #.long()
         predictions = predictions.float()
-        weights = 1 / torch.bincount(targets).float()
-        weight_tensor = targets.clone().float()
+        # weights = 1 / torch.bincount(targets).float()
+        # weight_tensor = targets.clone().float()
         
-        if len(weight_tensor) < 2 or min(weight_tensor) == 0: #< 4
-            # print("no weighting")
-            loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
-        else:
-            # print("weighting")
-            weight_tensor[weight_tensor == 0] = weights[0]
-            weight_tensor[weight_tensor == 1] = weights[1]            
-            weight_tensor = weight_tensor.flatten().unsqueeze(1)   
-            loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
+        # if len(weight_tensor) < 2 or min(weight_tensor) == 0: #< 4
+        loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean')
+        # else:
+        #     weight_tensor[weight_tensor == 0] = weights[0]
+        #     weight_tensor[weight_tensor == 1] = weights[1]            
+        #     weight_tensor = weight_tensor.flatten().unsqueeze(1)   
+        #     loss_func = torch.nn.CrossEntropyLoss(reduction = 'mean', weight=weights)
         targets  = targets.unsqueeze(1)
-        loss_list = [loss_func(predictions, targets.flatten())]  
-        # print("loss list:")
-        # print(loss_list)
+        loss = loss_func(predictions, targets.flatten())
+        loss_list = [loss]  
         return torch.sum(torch.stack(loss_list))
 
