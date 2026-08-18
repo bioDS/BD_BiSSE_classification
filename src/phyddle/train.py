@@ -476,7 +476,7 @@ class CnnTrainer(Trainer):
         self.calib_phy_data_tensor = None
         self.train_history = None       # init with train()
         self.train_label_true = None    # init with load_input()
-        self.train_aux_data_mean_sd = (0,0)
+        self.trn_aux_data_mean_sd = (0,0)
         self.train_labels_num_mean_sd = (0,0)
         self.cpi_adjustments = np.array([0,0])
         self.norm_calib_labels_num = None
@@ -502,7 +502,7 @@ class CnnTrainer(Trainer):
             num_sample (int): The total number of samples in the dataset.
 
         Returns:
-            train_idx (numpy.ndarray): The indices for the training subset.
+            trn_idx (numpy.ndarray): The indices for the training subset.
             val_idx (numpy.ndarray): The indices for the validation subset.
             calib_idx (numpy.ndarray): The indices for the calibration subset.
 
@@ -515,14 +515,14 @@ class CnnTrainer(Trainer):
         assert num_train > 0
 
         # create input subsets
-        train_idx = np.arange(num_train, dtype='int')
+        trn_idx = np.arange(num_train, dtype='int')
         val_idx   = np.arange(num_val, dtype='int') + num_train
         calib_idx = np.arange(num_calib, dtype='int') + num_train + num_val
 
         # return
-        return train_idx, val_idx, calib_idx
+        return trn_idx, val_idx, calib_idx
     
-    def validate_tensor_idx(self, train_idx, val_idx, calib_idx):
+    def validate_tensor_idx(self, trn_idx, val_idx, calib_idx):
         """
         Validates input tensors.
 
@@ -530,7 +530,7 @@ class CnnTrainer(Trainer):
         each non-empty.
 
         Args:
-            train_idx (list): Training example indices.
+            trn_idx (list): Training example indices.
             val_idx (list): Validation example indices.
             calib_idx (list): Calibration example indices.
 
@@ -540,8 +540,8 @@ class CnnTrainer(Trainer):
         """
 
         msg = ''
-        if len(train_idx) == 0:
-            msg = 'Training dataset is empty: len(train_idx) == 0'
+        if len(trn_idx) == 0:
+            msg = 'Training dataset is empty: len(trn_idx) == 0'
         elif len(val_idx) == 0:
             msg = 'Validation dataset is empty: len(val_idx) == 0'
         elif len(calib_idx) == 0:
@@ -636,7 +636,8 @@ class CnnTrainer(Trainer):
                         classes.append(lab)
             pbar.update(1)
 
-            
+        
+        
         pbar.close()
         self.num_classes = len(classes)
         mean_num = total_num_sum / total_num_count
@@ -761,7 +762,11 @@ class CnnTrainer(Trainer):
         total_loss = 0.0
         total_n = 0
         total_correct = 0
-
+        all_delta = []
+        prob_list = []
+        pred_list = []
+        label_list = []
+        x_embed = []
         with torch.no_grad():
             for j in range(len(dataset)):
                 graph_list = dataset[j]
@@ -780,9 +785,11 @@ class CnnTrainer(Trainer):
                         g.lbl_num = util.normalize(g.lbl_num, self.num_msd)
                         g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
 
+                   
                     outputs = self.model(batch)
                     preds = outputs[3]
-
+                    delta = preds[:,1] - preds[:,0]
+                    all_delta.append(delta.detach().cpu())
                     loss = loss_func(preds, labels.flatten())
                     amax = preds.argmax(dim=1)
 
@@ -793,11 +800,29 @@ class CnnTrainer(Trainer):
                     total_correct += int(
                         (amax == labels.flatten()).sum()
                     )
-
+                    #print("idx", [g.idx for g in batch])
+                    #print("cat", [g.lbl_cat for g in batch])
+                    #print("aux data", [g.aux_dat for g in batch])
+                    pred_class = preds.argmax(dim=1)
+                    probs=torch.softmax(preds, dim=1)
+                    prob_list.append(probs)
+                    pred_list.append(pred_class)
+                    label_list.append(labels)
+                    #print("last batch mean pred", pred_class.float().mean().item())
+        probs = torch.cat(prob_list)
+        preds = torch.cat(pred_list)
+        labels = torch.cat(label_list)
+        print("mean P(class 1):", probs[:,1].mean().item(), "std", probs[:,1].std(unbiased=False).item())
+        all_delta = torch.cat(all_delta)
+        print("delta:", all_delta.mean().item(), delta.std(unbiased=False).item(),
+              all_delta.min().item(), all_delta.max().item())
+        print("bin pred", torch.bincount(preds), "bin labels", torch.bincount(labels))
         return total_loss / total_n, total_correct / total_n
 
     def get_reg_loss(self):
         reg_loss = 0.0
+        l1_lambda = 1e-5
+        l2_lambda = 1e-4
 
         if self.regularisation in ("L1", "L1L2"):
             l1_norm = sum(p.abs().sum() for p in self.model.parameters())
@@ -822,11 +847,11 @@ class CnnTrainer(Trainer):
 
         """
 
-        n_train_graphs = sum(block.shape[0] for block in self.train_blocks)
+        n_trn_graphs = sum(block.shape[0] for block in self.train_blocks)
         n_val_graphs = sum(block.shape[0] for block in self.val_blocks)
         n_calib_graphs = sum(block.shape[0] for block in self.cal_blocks)
         print("number of batches: " + str(len(self.train_blocks)))
-        print("n train:", n_train_graphs)
+        print("n train:", n_trn_graphs)
         print("n val:", n_val_graphs)
         print("n cal:", n_calib_graphs)
 
@@ -848,11 +873,17 @@ class CnnTrainer(Trainer):
         loss_aggregation = 'median'
         
         print("learning rate: ", str(self.learning_rate))
+        # net = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+
+        #for layer in [net.phy_std.gconv1, net.phy_std.gconv2, net.phy_std.gconv3, net.phy_std.gconv4]:
+        #    for p in layer.parameters():
+        #        p.requires_grad = False
 
         # optimizer
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         if self.optimizer == 'adam':
             optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
+            #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=self.learning_rate)
         if self.optimizer == 'adamw':
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
         elif self.optimizer == 'adagrad':
@@ -895,7 +926,7 @@ class CnnTrainer(Trainer):
 
         # plt.ion()
         # fig, ax = plt.subplots()
-        # train_line, = ax.plot([], [], label="Train")
+        # trn_line, = ax.plot([], [], label="Train")
         # val_line, = ax.plot([], [], label="Validation")
         # ax.set_xlabel("Epoch")
         # ax.set_ylabel("Loss")
@@ -905,7 +936,7 @@ class CnnTrainer(Trainer):
         val_losses = []
         num_batches = len(self.train_blocks)
         for i in range(self.num_epochs):
-
+            print("Epoch", str(i))
             if old_learning_rate != learning_rate:
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = learning_rate  
@@ -915,9 +946,9 @@ class CnnTrainer(Trainer):
             trn_loss_combined = 0.
             trn_acc_combined = 0.
             val_acc_combined = 0.
-            train_correct = 0.
+            trn_correct = 0.
             val_correct = 0.
-            train_length = 0.
+            trn_length = 0.
             val_length = 0.
             val_loss_combined = 0.
             val_loss_all_batches = 0
@@ -925,9 +956,9 @@ class CnnTrainer(Trainer):
             trn_mape_value = 0.
             trn_mae_value = 0.
 
-            train_msg = f'Training epoch {i+1} of {self.num_epochs}'
+            trn_msg = f'Training epoch {i+1} of {self.num_epochs}'
             self.model.train()
-            accumulation_steps = 7 # 7
+            accumulation_steps =  4
 
             optimizer.zero_grad()
 
@@ -936,12 +967,9 @@ class CnnTrainer(Trainer):
             loss_list = list()
 
             batch_count = 0
-            epoch_data_loss = 0
-            epoch_reg_loss = 0
-            epoch_n = 0
             l1_lambda = 1e-5
             l2_lambda = 1e-4
-            train_answers = 0
+            trn_answers = 0
             for j in range(len(self.train_dataset)):
                 graph_list = self.train_dataset[j]
                 loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
@@ -975,29 +1003,11 @@ class CnnTrainer(Trainer):
                     amax = preds.argmax(dim=1)
 
                     delta = preds[:, 1] - preds[:, 0]
-
-
-
-                    # print("loss:", loss_categ.item())
-                    # print("pred 1:", (amax == 1).float().mean().item())
-                    # print("mean P(class 1):", probs[:, 1].mean().item())
-                    # print("std P(class 1):", probs[:, 1].std().item())
-                    # print("idx", torch.cat([g.idx for g in batch], dim=0).to(self.TORCH_DEVICE))
-                    # print("true labels", lbl_cat)
-                    # print("preds", preds)
-                    # print("loss", loss_categ)
-                    # print("amax len", len(amax))
-
-                    epoch_data_loss += loss_categ.item() * len(amax)
-                    epoch_n += len(amax)
-                    train_correct += int((amax == lbl_cat.flatten()).sum())
-                    train_length += len(amax)
-                    train_answers += int(amax.sum())
-                    loss_list.append(loss_categ.item() * len(amax))                    
                     loss_categ_scaled = loss_categ / accumulation_steps
                     loss_categ_scaled.backward()
 
                     batch_count += 1
+
                     # update network parameters
                     if (batch_count % accumulation_steps == 0):
                         reg_loss = 0
@@ -1009,7 +1019,6 @@ class CnnTrainer(Trainer):
                             reg_loss = reg_loss + l2_lambda*l2_norm
                         if reg_loss != 0:
                             reg_loss.backward()
-                            epoch_reg_loss += reg_loss.item()
                         max_grad = 0
                         max_grad_name = None
                         # for name, p in self.model.named_parameters():
@@ -1024,145 +1033,67 @@ class CnnTrainer(Trainer):
                         #         max_grad_name = name
                         optimizer.step()
                         optimizer.zero_grad()
-            print("t delta mean:", delta.mean().item())
-            print("t delta std :", delta.std(unbiased=False).item())
-            print("t delta min :", delta.min().item())
-            print("tdelta max :", delta.max().item())
-            print("learning rate", optimizer.param_groups[0]["lr"])
-            # for name, p in self.model.named_parameters():
-            #     if p.grad is not None:
-            #         print(name, "grad mean =", p.grad.abs().mean().item(), "grad max =", p.grad.abs().max().item())
             if (batch_count % accumulation_steps != 0):
-                scale = accumulation_steps/(batch_count % accumulation_steps)
+                scale = accumulation_steps / (batch_count % accumulation_steps)
+
                 for p in self.model.parameters():
                     if p.grad is not None:
                         p.grad *= scale
-                    else:
-                        print("no grad here")
+
                 reg_loss = 0.0
 
                 if self.regularisation in ("L1", "L1L2"):
-                    l1_norm = sum(
-                        p.abs().sum()
-                        for p in self.model.parameters()
-                    )
-                    reg_loss = reg_loss + l1_lambda * l1_norm
+                    l1_norm = sum(p.abs().sum() for p in self.model.parameters())
+                    reg_loss += l1_lambda * l1_norm
 
                 if self.regularisation in ("L2", "L1L2"):
-                    l2_norm = sum(
-                        p.pow(2).sum()
-                        for p in self.model.parameters()
-                    )
-                    reg_loss = reg_loss + l2_lambda * l2_norm
+                    l2_norm = sum(p.pow(2).sum() for p in self.model.parameters())
+                    reg_loss += l2_lambda * l2_norm
 
                 if reg_loss != 0:
                     reg_loss.backward()
-                    epoch_reg_loss += reg_loss.item()
 
                 optimizer.step()
                 optimizer.zero_grad()
             pbar.close()
+           # print("truth", lbl_cat.flatten())
+            #print("final logits", third_arg)
 
-
-            trn_acc_combined += train_correct / train_length
-            trn_loss_combined = epoch_data_loss / epoch_n
-            metric_names = ['loss_combined', 'accuracy_combined']#, 'accuracy_combined']
-            train_metric_vals = [trn_loss_combined, trn_acc_combined ] 
-            trn_losses.append(trn_loss_combined)
+            # trn_acc_combined += trn_correct / trn_length
+            # trn_loss_combined = epoch_data_loss / epoch_n
+            
 
             trn_loss, trn_acc = self.evaluate(
                 self.train_dataset,
                 loss_categ_func
             )
-            reg_loss = self.get_reg_loss().item()
-            train_loss_combined = train_data_loss + reg_loss
+            reg_loss = 0
+            if self.regularisation != "NA":
+                reg_loss = self.get_reg_loss().item()
+            trn_loss_combined = trn_loss + reg_loss
+            metric_names = ['loss_combined', 'accuracy_combined']#, 'accuracy_combined']
+            trn_metric_vals = [trn_loss_combined, trn_acc ] 
+            trn_losses.append(trn_loss_combined)
 
-
-            trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(train_loss_combined)}\t'
-            trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc)}'
+            trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t{"{0:.4f}".format(trn_loss)}\t'
+            trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc)}\t'
 
             self.model.eval()
-            all_probs = []
-            all_labels = []
             with torch.no_grad():
-                val_num_batches = len(self.val_dataset)*(math.ceil(self.block_size / self.trn_batch_size))
-                pbar = tqdm(total=val_num_batches, desc=f"Epoch {i+1}/{self.num_epochs}")
-                val_data_loss = 0
                 
-                val_epoch_n = 0
-                # for j in range(len(self.val_dataset)):
-                #     graph_list = self.val_dataset[j]
-                #     val_loader = DataListLoader(graph_list, batch_size = self.trn_batch_size)
-                    
-                #     for batch in val_loader:
-                #         val_lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
-                #         val_lbl_num = torch.stack([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
-
-                #         for g in batch:
-                #             g.x = util.normalize(g.x, self.attr_msd)
-                #             g.lbl_num = util.normalize(g.lbl_num,  self.num_msd)
-                #             g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
-
-                #         # # forward pass of validation to estimate labels
-                #         try:
-                #             val_lbls_hat       = self.model(batch)
-                #             pbar.update(1)
-                #         except Exception as e:
-                #             print("val exception in lbls_hat, j:", j, e)
-                #             quit()
-
-                #         third_arg = val_lbls_hat[3]
-                #         probs = torch.softmax(third_arg, dim=1)
-                #         delta = probs[:, 1] - probs[:, 0]
-
-
-                #         all_probs.append(probs.cpu())
-                #         val_amax = third_arg.argmax(dim=1)
-                #         all_labels.append(val_lbl_cat.flatten().cpu())
-                #         val_loss_categ = loss_categ_func(third_arg, val_lbl_cat.flatten())#.item()
-
-                #         val_data_loss += val_loss_categ.item() * len(val_amax)
-                #         val_epoch_n += len(val_amax)
-
-                #         val_correct += int((val_amax == val_lbl_cat.flatten()).sum())
-                #         val_length += len(val_lbl_cat)
-                        
-                # val_data_loss = (val_data_loss / val_epoch_n)
-                # # print("val loss combined initial:", val_loss_combined)
-                # l1_norm = 0 
-                # l1_lambda = 1e-5
-                # l2_lambda = 1e-4
-                # val_reg_loss = 0
-                # print("v delta mean:", delta.mean().item())
-                # print("v delta std :", delta.std(unbiased=False).item())
-                # print("v delta min :", delta.min().item())
-                # print("v delta max :", delta.max().item())
-                # if self.regularisation == "L1" or self.regularisation == "L1L2":
-                #     for p in self.model.parameters():
-                #         l1_norm += p.abs().sum()
-                #     val_reg_loss +=  l1_lambda*l1_norm.item()
-                # if self.regularisation == "L2" or self.regularisation == "L1L2":
-                #     l2_norm = sum(p.square().sum() for p in self.model.parameters())
-                #     val_reg_loss +=  l2_lambda*l2_norm.item()
-
-                # val_loss_combined = val_reg_loss + val_data_loss
-                # val_acc_combined = val_correct/val_length    
-                # # print("total correct:", val_correct, " out of ", val_length)
-
                 val_loss, val_acc = self.evaluate(
                 self.val_dataset,
                 loss_categ_func
                 )
-                val_loss_combined = val_data_loss + reg_loss
+                val_loss_combined = val_loss + reg_loss
 
                 val_metric_vals = [
                                         val_loss_combined, val_acc]
                 val_acc_str = f'--   acc: {"{0:.4f}".format(val_acc)}'
                 # print("val loss combined:", val_loss_combined)
-                val_losses.append(val_loss)
+                val_losses.append(val_loss_combined)
 
-                pbar.close()
-                val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss)}\t'
+                val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t{"{0:.4f}".format(val_loss)}\t'
         
 
 
@@ -1247,9 +1178,9 @@ class CnnTrainer(Trainer):
                 prev_trn_acc_combined = trn_acc_combined
                 prev_val_acc_combined = val_acc_combined
                 # display training metric progress
-                # train_line.set_data(range(len(trn_losses)), trn_losses)                
+                # trn_line.set_data(range(len(trn_losses)), trn_losses)                
                 # val_line.set_data(range(len(val_losses)), val_losses)
-                # train_line.set_data(range(len(trn_losses)),[x for x in trn_losses])
+                # trn_line.set_data(range(len(trn_losses)),[x for x in trn_losses])
 
                 # val_line.set_data(range(len(val_losses)),[x for x in val_losses])
                 # print("trn losses", trn_losses)
@@ -1263,24 +1194,24 @@ class CnnTrainer(Trainer):
                 print("")
                 print(val_loss_str, val_acc_str)
                 print('')
-                print("ratio of training preds", train_answers/train_length)
+                # print("ratio of training preds", trn_answers/trn_length)
                 # print("ratio of preds", sum(third_arg.argmax(dim=1))/len(val_lbl_cat))
                 
-                all_probs = torch.cat(all_probs)
-                all_labels = torch.cat(all_labels)
-                print(
-                "mean p1 | true 0:",
-                all_probs[all_labels == 0].mean().item()
-                )
+                # all_probs = torch.cat(all_probs)
+                # all_labels = torch.cat(all_labels)
+                # print(
+                # "mean p1 | true 0:",
+                # all_probs[all_labels == 0].mean().item()
+                # )
 
-                print(
-                "mean p1 | true 1:",
-                all_probs[all_labels == 1].mean().item()
-                )
+                # print(
+                # "mean p1 | true 1:",
+                # all_probs[all_labels == 1].mean().item()
+                # )
                 # print(all_probs[1:10])
         
             # update train history log
-            self.update_train_history(i, metric_names, train_metric_vals, 'train')
+            self.update_train_history(i, metric_names, trn_metric_vals, 'train')
             self.update_train_history(i, metric_names, val_metric_vals, 'validation')
             path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
             model_history_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
@@ -1391,8 +1322,8 @@ class CnnTrainer(Trainer):
             for batch in loader:
                 pbar.update(1)
                 # batch = batch.to(self.TORCH_DEVICE)
-                train_labels_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
-                train_labels_num = torch.stack([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
+                trn_labels_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                trn_labels_num = torch.stack([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
                 idx_batch = np.array([g.idx for g in batch])
                 label_est = self.model(batch)
                 labels_num_est = label_est[3]
@@ -1403,10 +1334,10 @@ class CnnTrainer(Trainer):
 
 
                 if self.has_label_num:
-                    train_labels_num = train_labels_num.cpu().detach()#.numpy()
+                    trn_labels_num = trn_labels_num.cpu().detach()#.numpy()
                     
-                    all_true_res.append(train_labels_num)
-                        # self.train_label_num_true = np.append(self.train_label_num_true, train_labels_num)
+                    all_true_res.append(trn_labels_num)
+                        # self.train_label_num_true = np.append(self.train_label_num_true, trn_labels_num)
                     
                     # uncalibrated training estimates of numerical labels
                     # self.train_label_num_est = labels_num_est.copy()
@@ -1420,12 +1351,12 @@ class CnnTrainer(Trainer):
                 # generate calibration factors
 
                 if self.has_label_cat:
-                    train_label_cat = train_labels_cat.cpu().detach().numpy().astype('int')
+                    trn_label_cat = trn_labels_cat.cpu().detach().numpy().astype('int')
                     if j == 0 and first_batch:
                         # print("j =", j, "cat true is none")
-                        self.train_label_cat_true = train_label_cat.copy()
+                        self.train_label_cat_true = trn_label_cat.copy()
                     else:
-                        self.train_label_cat_true = np.append(self.train_label_cat_true, train_label_cat)
+                        self.train_label_cat_true = np.append(self.train_label_cat_true, trn_label_cat)
                     if not self.regression:
                         if j == 0 and first_batch:
                             self.train_label_cat_est = labels_cat_est.argmax(dim=1).cpu().detach().numpy()
@@ -1475,21 +1406,21 @@ class CnnTrainer(Trainer):
         model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
         model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
         model_cpi_fn                 = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.cpi_adjustments.csv'
-        # model_weights_fn           = f'{path_prefix}.train_weights.hdf5'
+        # model_weights_fn           = f'{path_prefix}.trn_weights.hdf5'
         
         # output scaling terms
-        train_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_norm.labels_num.csv'
-        train_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_norm.aux_data.csv'
-        train_attr_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_norm.attr_data.csv'
+        trn_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.labels_num.csv'
+        trn_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.aux_data.csv'
+        trn_attr_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.attr_data.csv'
 
 
         # output training labels
-        train_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_num.csv'
-        train_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num.csv'
-        train_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num_nocalib.csv'
-        train_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_cat.csv'
-        train_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_cat.csv'
-        train_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.normilzation.csv'
+        trn_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_true.labels_num.csv'
+        trn_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_num.csv'
+        trn_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_num_nocalib.csv'
+        trn_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_true.labels_cat.csv'
+        trn_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_cat.csv'
+        trn_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.normilzation.csv'
 
         
         # save model to file
@@ -1503,24 +1434,24 @@ class CnnTrainer(Trainer):
                                   float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
 
         # save aux_data names, means, sd for new test dataset normalization
-        self.train_aux_data_mean_sd = (self.aux_msd[0].cpu().numpy(), self.aux_msd[1].cpu().numpy())
+        self.trn_aux_data_mean_sd = (self.aux_msd[0].cpu().numpy(), self.aux_msd[1].cpu().numpy())
         df_aux_data = pd.DataFrame({
-                                    'mean':self.train_aux_data_mean_sd[0],
-                                    'sd':self.train_aux_data_mean_sd[1]})
-        df_aux_data.to_csv(train_aux_data_norm_fn, index=False, sep=',',
+                                    'mean':self.trn_aux_data_mean_sd[0],
+                                    'sd':self.trn_aux_data_mean_sd[1]})
+        df_aux_data.to_csv(trn_aux_data_norm_fn, index=False, sep=',',
                            float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
 
-        self.train_attr_data_mean_sd = (self.attr_msd[0].cpu().numpy(), self.attr_msd[1].cpu().numpy())
+        self.trn_attr_data_mean_sd = (self.attr_msd[0].cpu().numpy(), self.attr_msd[1].cpu().numpy())
         df_aux_data = pd.DataFrame({
-                                    'mean':self.train_attr_data_mean_sd[0],
-                                    'sd':self.train_attr_data_mean_sd[1]})
-        df_aux_data.to_csv(train_attr_data_norm_fn, index=False, sep=',',
+                                    'mean':self.trn_attr_data_mean_sd[0],
+                                    'sd':self.trn_attr_data_mean_sd[1]})
+        df_aux_data.to_csv(trn_attr_data_norm_fn, index=False, sep=',',
                            float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)                   
         
         # training example index
-        df_train_label_idx = pd.DataFrame(self.train_label_index, columns=['idx'])
-        # print("df_train_label_idx")
-        # print(df_train_label_idx)
+        df_trn_label_idx = pd.DataFrame(self.train_label_index, columns=['idx'])
+        # print("df_trn_label_idx")
+        # print(df_trn_label_idx)
  
         if self.has_label_num and self.regression:
             # save label names, means, sd for new test dataset normalization
@@ -1531,7 +1462,7 @@ class CnnTrainer(Trainer):
             df_labels = pd.DataFrame({'name':self.param_num_names[2:6],
                                       'mean':self.num_msd[0],
                                       'sd':self.num_msd[1]})
-            df_labels.to_csv(train_labels_num_norm_fn, index=False, sep=',',
+            df_labels.to_csv(trn_labels_num_norm_fn, index=False, sep=',',
                              float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
     
             # save CPI intervals
@@ -1542,17 +1473,17 @@ class CnnTrainer(Trainer):
             #                         float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
             
             # downsample all true training labels
-            df_train_label_true = pd.DataFrame(self.train_label_num_true,
+            df_trn_label_true = pd.DataFrame(self.train_label_num_true,
                                                columns=self.param_num_names[2:6])
             
             # save true values for train numerical labels
-            df_train_label_num_true = df_train_label_true[self.param_num_names[2:6]]
-            df_train_label_num_true = util.denormalize(df_train_label_num_true.copy(),
+            df_trn_label_num_true = df_trn_label_true[self.param_num_names[2:6]]
+            df_trn_label_num_true = util.denormalize(df_trn_label_num_true.copy(),
                                                         self.num_msd)
-            df_train_label_num_true = pd.concat([df_train_label_idx,
-                                                 df_train_label_num_true], axis=1 )
+            df_trn_label_num_true = pd.concat([df_trn_label_idx,
+                                                 df_trn_label_num_true], axis=1 )
             
-            df_train_label_num_true.to_csv(train_label_num_true_fn,
+            df_trn_label_num_true.to_csv(trn_label_num_true_fn,
                                             index=False, sep=',',
                                             float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
             
@@ -1562,23 +1493,23 @@ class CnnTrainer(Trainer):
             # self.train_label_num_est_calib = util.denormalize(self.train_label_num_est_calib,
             #                                                   self.train_labels_num_mean_sd)
             # print(self.param_num_names[0:4])
-            # df_train_label_num_est_nocalib = util.make_param_VLU_mtx(self.train_label_num_est,
+            # df_trn_label_num_est_nocalib = util.make_param_VLU_mtx(self.train_label_num_est,
             #                                                           self.param_num_names[0:4] )
-            # df_train_label_num_est_calib   = util.make_param_VLU_mtx(self.train_label_num_est_calib,
+            # df_trn_label_num_est_calib   = util.make_param_VLU_mtx(self.train_label_num_est_calib,
             #                                                           self.param_num_names )
-            # df_train_label_num_est_calib = pd.concat([df_train_label_idx,
-            #                                          df_train_label_num_est_calib], axis=1 )
-            # df_train_label_num_est_nocalib = pd.concat([df_train_label_idx,
-            #                                             df_train_label_num_est_nocalib], axis=1 )
+            # df_trn_label_num_est_calib = pd.concat([df_trn_label_idx,
+            #                                          df_trn_label_num_est_calib], axis=1 )
+            # df_trn_label_num_est_nocalib = pd.concat([df_trn_label_idx,
+            #                                             df_trn_label_num_est_nocalib], axis=1 )
 
             # convert to csv and save
-            pd.concat([df_train_label_idx,pd.DataFrame(self.train_label_num_est)],axis=1).to_csv(train_label_est_nocalib_fn,
+            pd.concat([df_trn_label_idx,pd.DataFrame(self.train_label_num_est)],axis=1).to_csv(trn_label_est_nocalib_fn,
                                                     index=False, sep=',',
                                                     float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
-            # df_train_label_num_est_nocalib.to_csv(train_label_est_nocalib_fn,
+            # df_trn_label_num_est_nocalib.to_csv(trn_label_est_nocalib_fn,
             #                                        index=False, sep=',',
             #                                        float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
-            # df_train_label_num_est_calib.to_csv(train_label_num_est_fn,
+            # df_trn_label_num_est_calib.to_csv(trn_label_num_est_fn,
             #                                      index=False, sep=',',
             #                                      float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
     
@@ -1586,19 +1517,19 @@ class CnnTrainer(Trainer):
             # save true values for train categ. labels
             print("end", self.train_label_cat_true)
             print(self.param_cat_names)
-            df_train_label_cat_true = pd.DataFrame(self.train_label_cat_true,
+            df_trn_label_cat_true = pd.DataFrame(self.train_label_cat_true,
                                                    columns=self.param_cat_names )
-            df_train_label_cat_true = pd.concat([df_train_label_idx, df_train_label_cat_true], axis=1 )
-            df_train_label_cat_true.to_csv(train_label_cat_true_fn,
+            df_trn_label_cat_true = pd.concat([df_trn_label_idx, df_trn_label_cat_true], axis=1 )
+            df_trn_label_cat_true.to_csv(trn_label_cat_true_fn,
                                            index=False, sep=',', mode=write_mode)
     
             # save train categorical label estimates
             #print(self.train_label_cat_est)
             if not self.regression:
-                df_train_label_cat_est = self.train_label_cat_est #pd.DataFrame(self.train_label_cat_est[0:max_idx,:],
+                df_trn_label_cat_est = self.train_label_cat_est #pd.DataFrame(self.train_label_cat_est[0:max_idx,:],
                 #                                      columns=self.param_cat_names )
-                df_train_label_cat_est = pd.concat([df_train_label_idx, pd.DataFrame(df_train_label_cat_est)], axis=1 )
-                df_train_label_cat_est.to_csv(train_label_cat_est_fn,
+                df_trn_label_cat_est = pd.concat([df_trn_label_idx, pd.DataFrame(df_trn_label_cat_est)], axis=1 )
+                df_trn_label_cat_est.to_csv(trn_label_cat_est_fn,
                                             index=False, sep=',',
                                             float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
         print("returning from save results")

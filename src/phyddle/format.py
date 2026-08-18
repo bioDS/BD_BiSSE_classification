@@ -51,8 +51,8 @@ scales = importr('scales')
 rlist = importr('rlist')
 phytools = importr('phytools')
 gen_graph = r['generate_phylogeny_graph']
-r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
-get_mle = r['get_mle_label']
+#r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
+#get_mle = r['get_mle_label']
 offset = -1
 graph_id = 0
 
@@ -163,6 +163,7 @@ class Formatter:
 
         self.aux_data = list(args['aux_data'])
         self.num_attr = 3
+        self.block_size = int(args['block_size'])
 
         # set number of processors
         if self.num_proc <= 0:
@@ -238,24 +239,27 @@ class Formatter:
             if self.tensor_format == 'hdf5':
                 self.create_hdf5('test')
                 self.create_hdf5('train')
-            elif self.tensor_format == 'csv':
-                self.create_csv('test')
-                self.create_csv('train')
             
-            rep_pos = 0
-            addition = 1000
-            if (addition > len(self.rep_idx)):
-                addition = len(self.rep_idx)
-            # print("addition:", addition)
-            while (rep_pos < len(self.rep_idx)):
-                util.print_str('▪ Encoding empirical data as tensors', verbose, ' at pos', rep_pos)
-                self.encode_all(self.rep_idx[(rep_pos):(rep_pos+addition)], mode='sim')
-                util.print_str('▪ Combining and writing empirical data as tensors', verbose, ' at pos ', rep_pos)      
-                # split examples into training and test datasets
+            strings = ["train", "test"]
+            for string in strings:
+               
+                rep_idx = self.split_idx[string]
+                
+                # print("rep idx:",rep_idx)
+                rep_pos = 0
+                addition = self.block_size
+                if (addition > len(rep_idx)):
+                    addition = len(rep_idx)
+                # print("addition:", addition)
+                while (rep_pos < len(rep_idx)):
+                    util.print_str('▪ Encoding simulated data as tensors', verbose, ' at pos', rep_pos)
+                    self.encode_all(rep_idx[(rep_pos):(rep_pos+addition)], mode='sim')
+                    util.print_str('▪ Combining and writing simulated data as tensors', verbose, ' at pos ', rep_pos)      
+                    # split examples into training and test datasets
 
-                self.write_tensor(rep_pos, rep_pos+addition, mode='sim')
-                rep_pos = rep_pos + addition
-                self.rep_data = None
+                    self.write_tensor(rep_pos, rep_pos+addition, mode=string)
+                    rep_pos = rep_pos + addition
+                    self.rep_data = None
 
     
 
@@ -280,11 +284,9 @@ class Formatter:
             self.split_idx = { 'empirical' : np.array(self.rep_idx) }
             if self.tensor_format == 'hdf5':
                 self.create_hdf5('empirical')
-            elif self.tensor_format == 'csv':
-                self.create_csv('empirical')
             
             rep_pos = 0
-            addition = 1000
+            addition = self.block_size
 
 
             if (addition + rep_pos > len(self.rep_idx)):
@@ -537,17 +539,14 @@ class Formatter:
         is delegated to write_tensor_csv() and write_tensor_hdf5() functions.
         """
         if mode == 'emp':
-            if self.tensor_format == 'csv':
-                self.write_tensor_csv('empirical', min_index, max_index)
-            elif self.tensor_format == 'hdf5':
-                self.write_tensor_hdf5('empirical', min_index, max_index)
+            self.write_tensor_hdf5('empirical',  min_index, max_index)
         elif mode == 'sim':
-            if self.tensor_format == 'csv':
-                self.write_tensor_csv('train', min_index, max_index)
-                self.write_tensor_csv('test', min_index, max_index)
-            elif self.tensor_format == 'hdf5':
-                self.write_tensor_hdf5('train', min_index, max_index)
-                self.write_tensor_hdf5('test', min_index, max_index)
+            self.write_tensor_hdf5('train',  min_index, max_index)
+            self.write_tensor_hdf5('test', min_index, max_index)
+        elif mode == 'train':
+            self.write_tensor_hdf5('train',  min_index, max_index)
+        elif mode == 'test':
+            self.write_tensor_hdf5('test', min_index, max_index)
         return
     
     def create_csv(self, data_str):
@@ -578,7 +577,7 @@ class Formatter:
     def create_hdf5(self, data_str):
         """ Initialise HDF5 file with maximum space required"""
         assert data_str in ['test', 'train', 'empirical']
-        # rep_idx               = self.split_idx[data_str]
+        rep_idx               = self.split_idx[data_str]
         # rep_idx               = np.array([ idx for idx in rep_idx if idx in self.rep_data ])
         # print(self.rep_data.values())
         # first_aux_data_values = list(self.rep_data.values())[0]['aux']
@@ -591,7 +590,7 @@ class Formatter:
         # print("rep_idx")
         # print(self.rep_idx)
         # dimensions
-        num_samples           = len(self.rep_idx)
+        num_samples           = len(rep_idx)
         tree_width            = self.tree_width
         num_data_length       = tree_width * self.num_data_col
         num_aux_data          = len(aux_data_names)
@@ -607,8 +606,10 @@ class Formatter:
         with h5py.File(out_hdf5_fn, 'w') as hdf5_file:
 
            # create HDF5 datasets
-            hdf5_file.create_dataset('idx', (len(self.split_idx[data_str]),),
-                                'i', self.split_idx[data_str], compression='gzip')
+            # hdf5_file.create_dataset('idx', (len(self.split_idx[data_str]),),
+            #                     'i', self.split_idx[data_str], compression='gzip')
+            hdf5_file.create_dataset('idx', (0, 1),
+                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,1))            
             hdf5_file.create_dataset('aux_data_names', (1, num_aux_data),
                                 'S64', aux_data_names.astype('S64'), compression='gzip')
             hdf5_file.create_dataset('label_names',(1, num_par_est),
@@ -643,7 +644,12 @@ class Formatter:
                         shape=(0, self.num_attr),  dtype='f', compression='gzip', chunks=True, maxshape=(None,self.num_attr))
             dat_graph_id = hdf5_file.create_dataset('graph_id', 
                     shape=(0,),  dtype='f', compression='gzip', chunks=True, maxshape=(None,))
-            return 
+            
+            # new_dat = np.array(range(len(rep_idx)))
+            # hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
+            # hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat        
+
+            return
 
 
     def write_tensor_hdf5(self, data_str, min_ind, max_ind):
@@ -668,7 +674,10 @@ class Formatter:
         #     mode = 'emp'
         
         # analysis info
-        # rep_idx               = self.split_idx[data_str]
+        if data_str in ['test', 'train']:
+            rep_idx               = self.split_idx[data_str]
+        else:
+            rep_idx = self.rep_idx
         # rep_idx               = np.array([ idx for idx in rep_idx if idx in self.rep_data ])
         # first_aux_data_values = list(self.rep_data.values())[0]['aux']
         # first_par_est_values  = list(self.rep_data.values())[0]['lbl']
@@ -707,9 +716,10 @@ class Formatter:
         #     # Each entry is a dictionary of phylo-state, aux, data, and label
             # inds = sorted(self.rep_data.keys()) #list(range(min_ind, max_ind + 1))
             # print("options:", self.rep_idx[min_ind:max_ind ])
-            inds = [int(x) for x in self.rep_idx[min_ind:max_ind ] if x in self.split_idx[data_str]]
+            #inds = [int(x) for x in rep_idx[min_ind:max_ind ]]
             # print("inds hopefully split:", data_str, inds)
-            res = [self.rep_data[idx] for idx in inds]
+            # print(self.rep_data.keys())
+            res = list(self.rep_data.values())
         #     dat_phy = hdf5_file.create_dataset('phy_data',
         #                                 (num_samples, num_data_length),
         #                                 dtype='f', compression='gzip', chunks=True)
@@ -739,7 +749,6 @@ class Formatter:
                 total_nodes = np.sum([np.array(x['num_nodes']) for x in res])
                 node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
                 node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
-                graph_cat = np.array(inds)#np.concatenate( [[i]* len(x['node_1']) for i,x in enumerate(res,start=0) ] ) + min_ind
                 
                 # dat_node_1 = hdf5_file.create_dataset('node_1',
                 #                             (len(node_1_cat), ),
@@ -764,6 +773,10 @@ class Formatter:
                 new_dat = np.vstack( [ x['aux'] for x in res ] )
                 hdf5_file['aux_data'].resize((hdf5_file['aux_data'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['aux_data'][-new_dat.shape[0]:] = new_dat  
+                
+                new_dat = np.vstack( [ k for k,v in list(self.rep_data.items()) if v is not None] )
+                hdf5_file['idx'].resize((hdf5_file['idx'].shape[0] + new_dat.shape[0]), axis=0)
+                hdf5_file['idx'][-new_dat.shape[0]:] = new_dat  
 
                 new_dat = node_attr_cat.reshape(total_nodes,self.num_attr, order='F')
                 hdf5_file['node_attr'].resize((hdf5_file['node_attr'].shape[0] + new_dat.shape[0]), axis=0)
@@ -777,9 +790,6 @@ class Formatter:
                 hdf5_file['node_2'].resize((hdf5_file['node_2'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['node_2'][-new_dat.shape[0]:] = new_dat       
 
-                new_dat = graph_cat
-                hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat        
 
        
 
@@ -791,6 +801,9 @@ class Formatter:
                 hdf5_file['num_nodes'].resize((hdf5_file['num_nodes'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['num_nodes'][-new_dat.shape[0]:] = new_dat    
 
+                new_dat = np.array(range(len([x for x in res if x is not None])))
+                hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
+                hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat      
 
 
                 # self.dat_phy[:,:] = 
@@ -823,6 +836,10 @@ class Formatter:
         Args:
             data_str (str): specifies 'test' or 'train' dataset
         """
+        if data_str in ["train", "test"]:
+            rep_idx = self.split_idx[data_str]
+        else:
+            rep_idx = self.rep_idx
         first_aux_data_values = list(self.rep_data.values())[0]['aux']
         first_par_est_values  = list(self.rep_data.values())[0]['lbl']
         aux_data_names        = first_aux_data_values.columns.to_list()
@@ -948,7 +965,7 @@ class Formatter:
         aux_fn     = tmp_fn + '.aux_data.csv'
         lbl_fn     = tmp_fn + '.labels.csv'
         par_est_fn = tmp_fn + '.param_est.csv'
-        
+       
         # check if key files exist
         if not os.path.exists(dat_fn):
             self.logger.write_log('fmt', f'Cannot find {dat_fn}')
@@ -1054,6 +1071,7 @@ class Formatter:
             'to': node_2
             })
 
+
         nodes_dist = graph_data_base[0].rx2('dist')
         parents_dist = graph_data_base[0].rx2('dist_to_parent')
         desc_ratio = graph_data_base[0].rx2('desc_ratio')
@@ -1064,6 +1082,15 @@ class Formatter:
         num_edges = max(len(node_1), len(node_2))
         num_nodes = len(nodes_dist)
         offset = offset + num_edges
+
+                
+        if (len(nodes_dist) != max(node_1.max(), node_2.max())):
+            print("nodes_dist:", len(nodes_dist))
+            print("max edge node:", max(node_1.max(), node_2.max()))
+            print("unique edge nodes:", len(np.unique(np.concatenate([node_1,node_2]))))
+            print(graph_data)
+            quit()
+
         save_graph_csv_ = self.save_graph_csv # or save_graph_csv
         if save_graph_csv_  and graph_data is not None:
             graph_str =  edge_data.to_string(index_names=False, index=False, header=False)#util.ndarray_to_flat_str(np.array(graph_data[1])) + "\n" #util.ndarray_to_flat_str(np.array(graph_data)) + '\n'
@@ -1085,7 +1112,12 @@ class Formatter:
         labels = None
         if mode == 'sim' or len(self.param_data) > 0:
             labels = pd.read_csv(lbl_fn, header=0)
-            if labels['model_type'].iloc[0] not in self.select_classes:
+            try:
+                if labels['model_type'].iloc[0] not in self.select_classes:
+                    return None
+            except:
+                print("labels:", labels)
+                print("exception")
                 return None
             
         # process parameters to estimate
@@ -1132,7 +1164,6 @@ class Formatter:
         aux_data.to_csv(aux_fn, index=False, float_format=util.PANDAS_FLOAT_FMT_STR)
 
     
-
         # done!
         return idx, cpvs_data, node_attr, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
     
@@ -1539,20 +1570,7 @@ class Formatter:
         hdf5_fn = f'{path_prefix}.hdf5'
 
         # read data
-        if self.tensor_format == 'csv':
-            phy_data = pd.read_csv(phy_data_fn, header=None,
-                                   on_bad_lines='skip').to_numpy()
-            aux_data = pd.read_csv(aux_data_fn, header=None,
-                                   on_bad_lines='skip').to_numpy()
-            idx_data = pd.read_csv(idx_data_fn,
-                                   on_bad_lines='skip')
-            labels = pd.read_csv(labels_fn, header=None,
-                                 on_bad_lines='skip').to_numpy()
-            label_names = labels[0,:]
-            labels = labels[1:,:].astype('float64')
-            aux_data = aux_data[1:,:].astype('float64')
-            aux_data_names = aux_data[0,:]
-        elif self.tensor_format == 'hdf5':
+        if self.tensor_format == 'hdf5':
 
 
             hdf5_file = h5py.File(hdf5_fn, 'r')

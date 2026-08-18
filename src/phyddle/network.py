@@ -71,12 +71,12 @@ class GCN_PhyloPool(torch.nn.Module):
             num_outs = 4
         else:
             num_outs = 2
-        self.gconv1 = GCNConv(num_node_features, 2*hidden_channels) #GCNConv #  heads=heads
-        self.gconv2 = GCNConv(2*hidden_channels*heads, 4*hidden_channels*heads) #  heads=heads
-        self.gconv3 = GCNConv(4*hidden_channels*heads, 8*hidden_channels*heads) #  heads=heads
-        self.gconv4 = GCNConv(8*hidden_channels*heads, 16*hidden_channels*heads) #  heads=heads
-        self.fc1  = torch.nn.Linear(16*hidden_channels, 4*hidden_channels)
-        self.fc2  = torch.nn.Linear(4*hidden_channels, num_classes)
+        self.gconv1 = GCNConv(num_node_features, 1*hidden_channels) #GCNConv #  heads=heads
+        self.gconv2 = GCNConv(1*hidden_channels*heads, 1*hidden_channels*heads) #  heads=heads
+        self.gconv3 = GCNConv(1*hidden_channels*heads, 1*hidden_channels*heads) #  heads=heads
+        self.gconv4 = GCNConv(1*hidden_channels*heads, 2*hidden_channels*heads) #  heads=heads
+        self.fc1  = torch.nn.Linear(2*hidden_channels, 2*hidden_channels)
+        self.fc2  = torch.nn.Linear(2*hidden_channels, num_classes)
         self.dropout = nn.Dropout(p=0.01) # Utilisez nn.Dropout au lieu de p_dropout
 
         # self.conv1 = nn.Conv1d(hidden_channels*heads*heads, 2*hidden_channels*heads*heads, kernel_size=ker_size) # 1, *2
@@ -102,28 +102,42 @@ class GCN_PhyloPool(torch.nn.Module):
         )
         self.TORCH_DEVICE = torch.device(self.TORCH_DEVICE_STR)
 
-    def forward(self, x, edge_index, batch):
+    def get_embedding(self, x, edge_index, batch):
+
         x = x.to(self.TORCH_DEVICE)
         edge_index = edge_index.to(self.TORCH_DEVICE)
         batch = batch.to(self.TORCH_DEVICE)
-        batch_size = batch.max().item() + 1
-        # print("edge index: ", edge_index)
-        # print("x shape: ", x.shape, "edge index shape: ", edge_index.shape)
         x = self.gconv1(x, edge_index)
-        x = F.relu(x) #relu
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = F.leaky_relu(x) #relu
+        x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
         x = self.gconv2(x, edge_index)
-        x = F.relu(x) #relu
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = F.leaky_relu(x) #relu
+        x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
         x = self.gconv3(x, edge_index)
-        x = F.relu(x) #relu
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
+        x = F.leaky_relu(x) #relu
+        x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
         x = self.gconv4(x, edge_index)
-        x = F.relu(x) #relu
-        x = F.dropout(x, p=0.01, training=self.training) # p = 0.01
-        x = global_mean_pool(x, batch)
+        x = F.leaky_relu(x) #relu
+        x = F.dropout(x, p=0.1, training=self.training) # p = 0.01
+        mean = global_mean_pool(x, batch)
+        mean_sq = global_mean_pool(x ** 2, batch)
+        var = (mean_sq - mean**2).clamp_min(0)
+        x = torch.cat([var], dim=1)#global_mean_pool
+       # print("pooled norms:", x.norm(dim=1))
+       # print("pooled max:", x.abs().max(dim=1).values)
+       # print("pooled shape:", x.shape, "std", x.std(dim=0).mean())
+       # print("pooled graph norms:", x.norm(dim=1))
+       # print("pairwise graph differences:",
+       #             torch.pdist(x).mean().item())
+        #print("pooled first five", x[:5])
+        return x
+    
+    def forward(self, x, edge_index, batch):
+        x = self.get_embedding(x, edge_index, batch)
         x = self.fc1(x)
         x = self.fc2(x)
+        #print("logits", x)
+        #print("logits", x[:5], "std", x.std(dim=0))
         # print("mean", x.std(dim=0).mean())
         # print("max", x.std(dim=0).max())
         # print(x[:5])
