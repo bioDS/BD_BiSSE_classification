@@ -741,12 +741,19 @@ class Formatter:
         
         # store all numerical data into hdf5)
             # print("len res", len(res))
-            if len(res) > 0:                
-                node_attr_cat = np.concatenate([(np.array(x['node_attr'], dtype=np.float64)) for x in res ], axis=None)
+            if len(res) > 0:
+                # NOTE: graphs have different numbers of nodes, so node_attr
+                # cannot be flattened across all graphs and reshaped with a
+                # single global order='F' (that assumes one uniform matrix and
+                # scrambles feature columns across graph boundaries). Stack
+                # each graph's own (num_nodes_i, num_attr) block instead.
+                node_attr_cat = np.vstack([
+                    np.asarray(x['node_attr'], dtype=np.float64).reshape(-1, self.num_attr)
+                    for x in res
+                ])
                 # print("cat:")
                 # print(node_attr_cat)
                 # print("total nodes:")
-                total_nodes = np.sum([np.array(x['num_nodes']) for x in res])
                 node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
                 node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
                 
@@ -778,7 +785,7 @@ class Formatter:
                 hdf5_file['idx'].resize((hdf5_file['idx'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['idx'][-new_dat.shape[0]:] = new_dat  
 
-                new_dat = node_attr_cat.reshape(total_nodes,self.num_attr, order='F')
+                new_dat = node_attr_cat
                 hdf5_file['node_attr'].resize((hdf5_file['node_attr'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['node_attr'][-new_dat.shape[0]:] = new_dat
 
@@ -1076,7 +1083,16 @@ class Formatter:
         parents_dist = graph_data_base[0].rx2('dist_to_parent')
         desc_ratio = graph_data_base[0].rx2('desc_ratio')
         # tip = graph_data_base[0].rx2('tip')
-        node_attr = pd.DataFrame({nodes_dist, parents_dist, desc_ratio})
+        # NOTE: must be a dict (named columns), not a set literal. A set has no
+        # guaranteed order and pandas builds one row per set element instead of
+        # one column per feature, which silently transposed and reshuffled the
+        # node feature columns (dist, dist_to_parent, desc_ratio) independently
+        # for every simulated tree.
+        node_attr = pd.DataFrame({
+            'dist': pd.Series(nodes_dist),
+            'dist_to_parent': pd.Series(parents_dist),
+            'desc_ratio': pd.Series(desc_ratio),
+        })
         # node_1 = graph_data[1].rx2('node1')
         # node_2 = graph_data[1].rx2('node2')
         num_edges = max(len(node_1), len(node_2))
