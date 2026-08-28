@@ -161,7 +161,7 @@ class Formatter:
         self.save_graph_csv = bool(args['save_graph_csv'])
         self.select_classes = list(args['select_classes'])
 
-        self.aux_data = list(args['aux_data'])
+        self.aux_data = ["log10_tree_length","log10_root_age","log10_brlen_mean","log10_age_mean","log10_B1","colless","age_var","brlen_var","treeness","N_bar","f_dat_0","n_dat_0","f_dat_1","n_dat_1","num_taxa","prop_taxa"]
         self.num_attr = 3
         self.block_size = int(args['block_size'])
 
@@ -463,6 +463,7 @@ class Formatter:
                                         'num_nodes':i[6],
                                         'aux': i[7],
                                         'lbl': i[8]}
+               # print("aux:",i[7])
 #         return idx, cpvs_data, node_attr, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
                 if i[6] != i[2].shape[1]:
                     print(i[2].shape)
@@ -594,7 +595,6 @@ class Formatter:
         tree_width            = self.tree_width
         num_data_length       = tree_width * self.num_data_col
         num_aux_data          = len(aux_data_names)
-        # print("num_aux_data", num_aux_data)
         num_par_est           = len(par_est_names)
          # print info
         print(f'Making {data_str} hdf5 dataset: {num_samples} examples for tree width = {tree_width}')
@@ -771,9 +771,11 @@ class Formatter:
                 hdf5_file['labels'][-new_dat.shape[0]:] = new_dat   
 
                 new_dat = np.vstack( [ x['aux'] for x in res ] )
+                #print("aux dat new dat", new_dat)
                 hdf5_file['aux_data'].resize((hdf5_file['aux_data'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['aux_data'][-new_dat.shape[0]:] = new_dat  
-                
+
+
                 new_dat = np.vstack( [ k for k,v in list(self.rep_data.items()) if v is not None] )
                 hdf5_file['idx'].resize((hdf5_file['idx'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['idx'][-new_dat.shape[0]:] = new_dat  
@@ -1576,6 +1578,7 @@ class Formatter:
             hdf5_file = h5py.File(hdf5_fn, 'r')
             phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
             aux_data = pd.DataFrame(hdf5_file['aux_data']).to_numpy()
+            print("aux data 1580", aux_data)
             idx_data = pd.DataFrame(hdf5_file['idx'], columns=['idx'])
             labels = pd.DataFrame(hdf5_file['labels']).to_numpy()
             label_names = [ s.decode() for s in hdf5_file['label_names'][0,:] ]
