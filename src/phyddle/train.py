@@ -40,6 +40,8 @@ from torch_geometric.utils import to_undirected
 
 torch.cuda.empty_cache()
 torch.cuda.set_per_process_memory_fraction(0.8, device=0)
+np.random.seed(42)
+
 
 # dist.init_process_group(backend='nccl')
 # local_rank = int(os.environ['LOCAL_RANK'])
@@ -251,7 +253,6 @@ class Trainer:
         # args
         self.args                   = args
 
-        self.network_type = str(args['network_type'])
 
         # filesystem
         self.fmt_prefix             = str(args['fmt_prefix'])
@@ -282,22 +283,22 @@ class Trainer:
         self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
         
         # train settings
-        self.prop_cal           = float(args['prop_cal'])
-        self.prop_val           = float(args['prop_val'])
+        self.n_val_blocks           = int(args['n_val_blocks'])
         self.num_epochs         = int(args['num_epochs'])
         self.load_model         =bool(args['load_model'])
         self.phylo_pool         =bool(args['phylo_pool'])
+        self.extra_layers       =bool(args['extra_layers'])
+        self.phylo_n_layers     =int(args['n_layers_phylo'])
+        self.avg_n_layers       =int(args['n_layers_avg'])
         self.graph_conv         =bool(args['graph_conv'])
         self.trn_batch_size     = int(args['trn_batch_size'])
-        self.cpi_coverage       = float(args['cpi_coverage'])
-        self.cpi_asymmetric     = bool(args['cpi_asymmetric'])
         self.loss_numerical     = str(args['loss_numerical'])
         self.use_cuda           = bool(args['use_cuda'])
         self.num_early_stop     = int(args['num_early_stop'])
         self.learning_rate      = float(args['learning_rate'])
         self.activation_func    = str(args['activation_func'])
         self.optimizer          = str(args['optimizer'])
-        self.phy_hidden_size    = int(args['phy_hidden_size'])
+        self.hidden_size    = int(args['phy_hidden_size'])
         self.regularisation = str(args['regularisation'])
         self.regression = bool(args['regression'])
         self.num_classes = int(args['num_classes'])
@@ -307,9 +308,7 @@ class Trainer:
         self.phy_tensors        = dict()   # init with encode_all()
         self.train_dataset      = None     # init with load_input()
         self.val_dataset        = None     # init with load_input()
-        self.calib_dataset      = None     # init with load_input()
         self.train_blocks       = None
-        self.cal_blocks         = None
         self.val_blocks         = None
         self.num_msd            = None
         self.attr_msd           = None
@@ -317,7 +316,8 @@ class Trainer:
         self.first_block = True
         self.idx_num = list()
         self.idx_cat = list()
-
+        self.epochs_since = 0
+        self.best_val_loss = -1
         
         # set CPUs
         if self.num_proc <= 0:
@@ -373,11 +373,11 @@ class Trainer:
         print("self.regression in training: ", self.regression)
         # perform run tasks
         util.print_str('▪ Loading input:', verbose)
+        util.print_str('▪ Loading input:', verbose)
         self.load_input()
 
         num_rjust = len(str(sum(block.shape[0] for block in self.train_blocks)))
         util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.train_blocks)).rjust(num_rjust) + ' training examples', verbose)
-        util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.cal_blocks)).rjust(num_rjust) + ' calibration examples', verbose)
         util.print_str(f'  ▪ ' + str(sum(block.shape[0] for block in self.val_blocks)).rjust(num_rjust) + ' validation examples', verbose)
 
         util.print_str('▪ Training targets:', verbose)
@@ -465,7 +465,6 @@ class CnnTrainer(Trainer):
         # todo: revisit and simplify, provide types
         self.train_dataset = None       # init with load_input()
         self.val_dataset   = None       # init with load_input()
-        self.calib_dataset = None       # init with load_input()
         self.model = None               # init with build_network()
         self.train_label_num_est = None
         self.train_label_num_true = None
@@ -473,83 +472,20 @@ class CnnTrainer(Trainer):
         self.train_label_cat_true = None
         self.train_label_num_est_calib = None
         self.train_label_index = None
-        self.calib_phy_data_tensor = None
         self.train_history = None       # init with train()
         self.train_label_true = None    # init with load_input()
         self.trn_aux_data_mean_sd = (0,0)
         self.train_labels_num_mean_sd = (0,0)
-        self.cpi_adjustments = np.array([0,0])
-        self.norm_calib_labels_num = None
         self.has_label_cat = False
         self.has_label_num = False
         self.ignore_label_num = False
         # self.regression = True
         self.block_size = int(args['block_size'])
-        self.restrict_sample = bool(args['restrict_sample'])
+        self.dataset_size = int(args['dataset_size'])
+        self.accumulation_steps = int(args['accumulation_steps'])
         self.scheduler="manual"
+        self.dropout = float(args['dropout'])
         
-        return
-    
-    # splits input into training, test, validation, and calibration
-    def split_tensor_idx(self, num_sample):
-        """
-        Split tensor into parts.
-
-        This function splits the indexes for training examples into training,
-        validation, and calibration sets.
-
-        Args:
-            num_sample (int): The total number of samples in the dataset.
-
-        Returns:
-            trn_idx (numpy.ndarray): The indices for the training subset.
-            val_idx (numpy.ndarray): The indices for the validation subset.
-            calib_idx (numpy.ndarray): The indices for the calibration subset.
-
-        """
-
-        # get number of training, validation, and calibration datapoints
-        num_calib = int(np.floor(num_sample * self.prop_cal))
-        num_val   = int(np.floor(num_sample * self.prop_val))
-        num_train = num_sample - (num_val + num_calib)
-        assert num_train > 0
-
-        # create input subsets
-        trn_idx = np.arange(num_train, dtype='int')
-        val_idx   = np.arange(num_val, dtype='int') + num_train
-        calib_idx = np.arange(num_calib, dtype='int') + num_train + num_val
-
-        # return
-        return trn_idx, val_idx, calib_idx
-    
-    def validate_tensor_idx(self, trn_idx, val_idx, calib_idx):
-        """
-        Validates input tensors.
-
-        Checks that training, validation, and calibration input tensors are
-        each non-empty.
-
-        Args:
-            trn_idx (list): Training example indices.
-            val_idx (list): Validation example indices.
-            calib_idx (list): Calibration example indices.
-
-        Returns:
-            ValueError if any of the datasets are empty, otherwise returns None.
-
-        """
-
-        msg = ''
-        if len(trn_idx) == 0:
-            msg = 'Training dataset is empty: len(trn_idx) == 0'
-        elif len(val_idx) == 0:
-            msg = 'Validation dataset is empty: len(val_idx) == 0'
-        elif len(calib_idx) == 0:
-            msg = 'Calibration dataset is empty: len(calib_idx) == 0'
-        if msg != '':
-            self.logger.write_log('trn', msg)
-            raise ValueError(msg)
-
         return
 
 
@@ -576,22 +512,19 @@ class CnnTrainer(Trainer):
         N = 0
         with h5py.File(input_hdf5_fn, "r") as f:
             N = f["phy_data"].shape[0]
-        if self.restrict_sample == True:
-            N = 2000
+        if self.dataset_size != -1 and self.dataset_size < N:
+            N = self.dataset_size
+        else:
+            self.dataset_size = N
         print("N = ", N)
         perm = np.random.permutation(N)
-        print("perm:", perm)
         print("self.block_size:", self.block_size)
         blocks = [perm[i:i+self.block_size] for i in range(0,N,self.block_size)]
-        split_1 = int(self.prop_cal*len(blocks))
-        split_2 = split_1 + int(self.prop_val*len(blocks))
-        print("splits", split_1, split_2)
-        self.cal_blocks = blocks[:split_1]
-        self.val_blocks = blocks[split_1:split_2]
-        self.train_blocks = blocks[split_2:]
+
+        self.val_blocks = blocks[:self.n_val_blocks]
+        self.train_blocks = blocks[self.n_val_blocks:]
         assert len(self.val_blocks) > 0
         assert len(self.train_blocks) > 0
-        assert len(self.cal_blocks) > 0
 
         total_num_sum = torch.zeros(4, device=self.TORCH_DEVICE)
         total_num_sq_sum = torch.zeros(4, device=self.TORCH_DEVICE)
@@ -626,7 +559,6 @@ class CnnTrainer(Trainer):
                 total_num_sq_sum += labels_num ** 2
                 total_num_count += labels_num.shape[0]
                 total_attr_sum += x.sum(dim=0)
-                total_attr_sq_sum += (x ** 2).sum(dim=0)
                 total_attr_count += x.shape[0]
                 total_aux_sum += aux.squeeze(0)
                 total_aux_sq_sum += (aux.squeeze(0) ** 2)
@@ -657,7 +589,6 @@ class CnnTrainer(Trainer):
         self.attr_msd = tuple(t.to(self.TORCH_DEVICE) for t in self.attr_msd)
 
         self.val_dataset = HDF5BlockDataset(input_hdf5_fn, self.val_blocks, self)
-        self.cal_dataset = HDF5BlockDataset(input_hdf5_fn, self.cal_blocks, self)
 
         return 
     
@@ -714,18 +645,22 @@ class CnnTrainer(Trainer):
        
         # torch multiprocessing, eventually need to get working with cuda
         torch.set_num_threads(self.num_proc)
-       # if self.network_type == "CNN" or self.network_type == None:
+        self.n_layers = self.avg_n_layers
+        if self.phylo_pool:
+            self.n_layers = self.phylo_n_layers
         if True:
             # build model architecture
-            self.model = network.ParameterEstimationNetwork(phy_dat_width=self.num_data_col,
-                                                        phy_dat_height=self.tree_width,
+            self.model = network.ParameterEstimationNetwork(
                                                         num_node_features = self.num_node_features,
+                                                        hidden_size = self.hidden_size,
                                                         num_classes = self.num_classes,
-                                                        aux_dat_width=self.num_aux_data,
-                                                        lbl_width=self.num_param_num,
                                                         param_cat=self.param_cat,
                                                         phylo_pool = self.phylo_pool,
                                                         graph_conv = self.graph_conv,
+                                                        extra_layers = self.extra_layers,
+                                                        n_layers = self.n_layers,
+                                                        dropout=self.dropout,
+                                                        activation_func=self.activation_func,
                                                         args=self.args)
 
         if self.use_cuda:
@@ -807,6 +742,15 @@ class CnnTrainer(Trainer):
                     probs=torch.softmax(preds, dim=1)
                     prob_list.append(probs)
                     pred_list.append(pred_class)
+                    #print("aux data", [g.aux_dat for g in batch])
+                    pred_class = preds.argmax(dim=1)
+                    probs=torch.softmax(preds, dim=1)
+                    prob_list.append(probs)
+                    pred_list.append(pred_class)
+                    pred_class = preds.argmax(dim=1)
+                    probs=torch.softmax(preds, dim=1)
+                    prob_list.append(probs)
+                    pred_list.append(pred_class)
                     label_list.append(labels)
                     #print("last batch mean pred", pred_class.float().mean().item())
         probs = torch.cat(prob_list)
@@ -849,11 +793,28 @@ class CnnTrainer(Trainer):
 
         n_trn_graphs = sum(block.shape[0] for block in self.train_blocks)
         n_val_graphs = sum(block.shape[0] for block in self.val_blocks)
-        n_calib_graphs = sum(block.shape[0] for block in self.cal_blocks)
         print("number of batches: " + str(len(self.train_blocks)))
         print("n train:", n_trn_graphs)
         print("n val:", n_val_graphs)
-        print("n cal:", n_calib_graphs)
+
+        train_sum = 0
+        val_sum = 0
+        for j in range(len(self.train_dataset)):
+            graph_list = self.train_dataset[j]
+            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
+            for batch in loader:
+                lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                train_sum += (lbl_cat == 1).sum().item()
+        for j in range(len(self.val_dataset)):
+            graph_list = self.val_dataset[j]
+            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
+            for batch in loader:
+                lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                val_sum += (lbl_cat == 1).sum().item()
+        print("n train BiSSE:", train_sum)
+        print("n train BD:", n_trn_graphs - train_sum)
+        print("n val BiSSE:", val_sum)
+        print("n val BD:", n_val_graphs - val_sum)
 
         # validation dataset
 
@@ -862,13 +823,6 @@ class CnnTrainer(Trainer):
 
 
         # loss functions
-        q_width = self.cpi_coverage
-        q_tail  = (1.0 - q_width) / 2
-        q_lower = q_tail
-        q_upper = 1.0 - q_tail
-        loss_value_func = self.make_loss_numerical_func()
-        loss_lower_func = network.QuantileLoss(alpha=q_lower)
-        loss_upper_func = network.QuantileLoss(alpha=q_upper)
         loss_categ_func = network.CrossEntropyLoss()
         loss_aggregation = 'median'
         
@@ -882,7 +836,7 @@ class CnnTrainer(Trainer):
         # optimizer
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         if self.optimizer == 'adam':
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001,eps=1e-4)
             #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=self.learning_rate)
         if self.optimizer == 'adamw':
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate, weight_decay=0.00001)
@@ -935,6 +889,7 @@ class CnnTrainer(Trainer):
         trn_losses = []
         val_losses = []
         num_batches = len(self.train_blocks)
+        binary_boundary_count = 0
         for i in range(self.num_epochs):
             print("Epoch", str(i))
             if old_learning_rate != learning_rate:
@@ -958,7 +913,8 @@ class CnnTrainer(Trainer):
 
             trn_msg = f'Training epoch {i+1} of {self.num_epochs}'
             self.model.train()
-            accumulation_steps =  4
+            accumulation_steps =  self.accumulation_steps
+            self.effective_batch_size = accumulation_steps * self.trn_batch_size
 
             optimizer.zero_grad()
 
@@ -970,7 +926,8 @@ class CnnTrainer(Trainer):
             l1_lambda = 1e-5
             l2_lambda = 1e-4
             trn_answers = 0
-            for j in range(len(self.train_dataset)):
+            block_order = np.random.permutation(len(self.train_dataset))
+            for j in block_order:
                 graph_list = self.train_dataset[j]
                 loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
                 for batch in loader:
@@ -1019,6 +976,9 @@ class CnnTrainer(Trainer):
                             reg_loss = reg_loss + l2_lambda*l2_norm
                         if reg_loss != 0:
                             reg_loss.backward()
+                        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        #print("epoch", i, "grad norm sample:", grad_norm.item())
+
                         max_grad = 0
                         max_grad_name = None
                         # for name, p in self.model.named_parameters():
@@ -1034,13 +994,13 @@ class CnnTrainer(Trainer):
                         optimizer.step()
                         optimizer.zero_grad()
             if (batch_count % accumulation_steps != 0):
-                scale = accumulation_steps / (batch_count % accumulation_steps)
+                #scale = accumulation_steps / (batch_count % accumulation_steps)
 
-                for p in self.model.parameters():
-                    if p.grad is not None:
-                        p.grad *= scale
+                #for p ini self.model.parameters():
+                #    if p.grad is not None:
+                #        p.grad *= scale
 
-                reg_loss = 0.0
+                #reg_loss = 0.0
 
                 if self.regularisation in ("L1", "L1L2"):
                     l1_norm = sum(p.abs().sum() for p in self.model.parameters())
@@ -1052,6 +1012,14 @@ class CnnTrainer(Trainer):
 
                 if reg_loss != 0:
                     reg_loss.backward()
+
+                scale = accumulation_steps / (batch_count % accumulation_steps)
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        p.grad *= scale
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+               # print("epoch", i, "grad norm sample (trailing batch):", grad_norm.item())
 
                 optimizer.step()
                 optimizer.zero_grad()
@@ -1078,6 +1046,12 @@ class CnnTrainer(Trainer):
             trn_loss_str = f'    Train        --   loss: {"{0:.4f}".format(trn_loss_combined)}\t{"{0:.4f}".format(trn_loss)}\t'
             trn_acc_str = f'--   acc: {"{0:.4f}".format(trn_acc)}\t'
 
+            # Count consecutive epochs with training loss of at least 0.69
+            if trn_loss_combined >= 0.69:
+                binary_boundary_count += 1
+            else:
+                binary_boundary_count = 0
+
             self.model.eval()
             with torch.no_grad():
                 
@@ -1085,7 +1059,7 @@ class CnnTrainer(Trainer):
                 self.val_dataset,
                 loss_categ_func
                 )
-                val_loss_combined = val_loss + reg_loss
+                val_loss_combined = val_loss #+ reg_loss
 
                 val_metric_vals = [
                                         val_loss_combined, val_acc]
@@ -1094,25 +1068,16 @@ class CnnTrainer(Trainer):
                 val_losses.append(val_loss_combined)
 
                 val_loss_str = f'    Validation   --   loss: {"{0:.4f}".format(val_loss_combined)}\t{"{0:.4f}".format(val_loss)}\t'
-        
+                if (self.best_val_loss == -1 or val_loss_combined < self.best_val_loss):
+                    self.best_val_loss = val_loss_combined
+                    self.epochs_since = 0
+                else:
+                    self.epochs_since += 1
 
 
             # changes in training metrics between epochs
                 if i > 0:
                     
-                    diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
-                    diff_val_loss = val_loss_combined - prev_val_loss_combined
-                    if (prev_trn_loss_combined == 0):
-                        rat_trn_loss = 100
-                    else:
-                        rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
-                    if (prev_val_loss_combined == 0):
-                        rat_val_loss = 100
-                    else:
-                        rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
-                    
-                    diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
-                    diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
                     rat_trn_loss_str  = '{0:+.2f}'.format(rat_trn_loss).rjust(4, ' ')
                     rat_val_loss_str  = '{0:+.2f}'.format(rat_val_loss).rjust(4, ' ')
 
@@ -1155,66 +1120,25 @@ class CnnTrainer(Trainer):
 
                     if diff_val_loss >= 0:
                         val_bad_count += 1
-                #         print("val bad count:", val_bad_count)
-                #         # if learning_rate > 0.00005 and i > 5 and val_cycle_good_count != 0:
-                #         #     learning_rate = learning_rate / 1.25
-                #         val_cycle_good_count = 0
                     else:
                         val_bad_count = 0
-                #         val_cycle_good_count += 1
-                #         # if val_cycle_good_count == 3:
-                #         #     learning_rate = learning_rate * 1.25
-                #         #     val_cycle_good_count = 0
-
-                # if i >= 15:
-                #     if (val_bad_count - 2) % 3 == 0:
-                #         learning_rate = learning_rate / 1.25
-                #     if val_cycle_good_count != 0 and val_cycle_good_count % 5 == 0:
-                #         learning_rate = learning_rate * 1.25
 
                 prev_trn_loss_combined = trn_loss_combined
                 prev_val_loss_combined = val_loss_combined
 
                 prev_trn_acc_combined = trn_acc_combined
                 prev_val_acc_combined = val_acc_combined
-                # display training metric progress
-                # trn_line.set_data(range(len(trn_losses)), trn_losses)                
-                # val_line.set_data(range(len(val_losses)), val_losses)
-                # trn_line.set_data(range(len(trn_losses)),[x for x in trn_losses])
-
-                # val_line.set_data(range(len(val_losses)),[x for x in val_losses])
-                # print("trn losses", trn_losses)
-                # print("val losses", val_losses)
-                # ax.relim()
-                # ax.autoscale_view()
-                # plt.pause(0.01)  # small delay to refresh UI
-
 
                 print(trn_loss_str, trn_acc_str)
                 print("")
                 print(val_loss_str, val_acc_str)
                 print('')
-                # print("ratio of training preds", trn_answers/trn_length)
-                # print("ratio of preds", sum(third_arg.argmax(dim=1))/len(val_lbl_cat))
-                
-                # all_probs = torch.cat(all_probs)
-                # all_labels = torch.cat(all_labels)
-                # print(
-                # "mean p1 | true 0:",
-                # all_probs[all_labels == 0].mean().item()
-                # )
-
-                # print(
-                # "mean p1 | true 1:",
-                # all_probs[all_labels == 1].mean().item()
-                # )
-                # print(all_probs[1:10])
         
             # update train history log
             self.update_train_history(i, metric_names, trn_metric_vals, 'train')
             self.update_train_history(i, metric_names, val_metric_vals, 'validation')
             path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
-            model_history_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
+            model_history_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.csv'
             self.train_history.to_csv(model_history_fn, index=False, sep=',',
                                   float_format=util.PANDAS_FLOAT_FMT_STR)
 
@@ -1226,12 +1150,20 @@ class CnnTrainer(Trainer):
             # early stopping
             if val_bad_count >= self.num_early_stop and self.num_early_stop > 0:
                 print(f'Early stop: validation loss increased for num_early_stop={self.num_early_stop} consecutive epochs')
-                history_plot_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.png'
+                history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
                 # plt.savefig(history_plot_fn)
 
                 # plt.close()
                 break
-        history_plot_fn = f'{path_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.png'
+            if binary_boundary_count >= 20:
+                print(f'Early stop: training loss was at least 0.69 for 20 consecutive epochs')
+                history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
+                break
+            if self.epochs_since >= 20:
+                print(f'Early stop: lowest validation loss was 20 epochs ago')
+                history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
+                break
+        history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
         # plt.savefig(history_plot_fn)
         # plt.close()
 
@@ -1256,49 +1188,6 @@ class CnnTrainer(Trainer):
         
         return
 
-    def perform_cpi_calibration(self):
-        """Performs CPI calibration.
-
-        This function performs CPI calibration to estimate the CPI adjustment
-        terms for the training dataset.
-
-        """
-        print("CPI CALIBRATION")
-
-        # make initial CPI estimates
-
-        for k in range(len(self.cal_dataset)):
-            graph_list = self.cal_dataset[k]
-            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
-            for step, data in enumerate(loader):
-                print(f'Calib step {step + 1}:')
-                print()
-        calib_batch = next(iter(loader))
-        try:
-            calib_label_est = self.model(calib_batch)
-        except Exception as e:
-            print("calib exception", e)
-            quit()
-
-        print("calib_label_est", calib_label_est)
-
-        # make CPI adjustments
-        if self.regression:
-            norm_calib_label_num_est = torch.stack(calib_label_est).cpu().detach().numpy()
-            norm_calib_num_est_quantiles = norm_calib_label_num_est[1:,:,:]
-            self.cpi_adjustments = self.get_cqr_constant(norm_calib_num_est_quantiles,
-                                                        self.norm_calib_labels_num,
-                                                        inner_quantile=self.cpi_coverage,
-                                                        asymmetric=self.cpi_asymmetric)
-            self.cpi_adjustments = np.array(self.cpi_adjustments).reshape((2,-1))
-
-        # restore device
-        # if self.use_cuda:
-        #     self.model = torch.nn.DataParallel(self.model)
-        # self.model.to(self.TORCH_DEVICE)
-
-        # done
-        return
     
     def make_results(self):
         """Makes all results from the Train step.
@@ -1367,9 +1256,7 @@ class CnnTrainer(Trainer):
         self.train_label_num_true = torch.cat(all_true_res, dim=0).numpy()
         self.train_label_num_est = torch.cat(all_est_res, dim=0).numpy()
         self.train_label_index = np.concatenate(all_idx)
-        print("self.train_label_index", self.train_label_index)
         pbar.close()   
-        print("self.train_label_num_true", self.train_label_num_true)
 
         # reformat categorical estimates, if they exist
         return
@@ -1394,8 +1281,8 @@ class CnnTrainer(Trainer):
         """Save training results.
 
         Saves all results from training procedure. Saved results include the
-        trained network, the normalization parameters for training/calibration,
-        CPI adjustment terms, and the training history.
+        trained network, the normalization parameters for training/calibration
+        and the training history.
 
         """
         # max_idx = 1000
@@ -1403,24 +1290,23 @@ class CnnTrainer(Trainer):
         path_prefix = f'{self.trn_dir}/{self.trn_prefix}'
         
         # output network model info
-        model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
-        model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
-        model_cpi_fn                 = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.cpi_adjustments.csv'
+        model_arch_fn                = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trained_model.pkl'
+        model_history_fn             = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.csv'
         # model_weights_fn           = f'{path_prefix}.trn_weights.hdf5'
         
         # output scaling terms
-        trn_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.labels_num.csv'
-        trn_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.aux_data.csv'
-        trn_attr_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_norm.attr_data.csv'
+        trn_labels_num_norm_fn    = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_norm.labels_num.csv'
+        trn_aux_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_norm.aux_data.csv'
+        trn_attr_data_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_norm.attr_data.csv'
 
 
         # output training labels
-        trn_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_true.labels_num.csv'
-        trn_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_num.csv'
-        trn_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_num_nocalib.csv'
-        trn_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_true.labels_cat.csv'
-        trn_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trn_est.labels_cat.csv'
-        trn_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.normilzation.csv'
+        trn_label_num_true_fn     = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_true.labels_num.csv'
+        trn_label_num_est_fn      = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_est.labels_num.csv'
+        trn_label_est_nocalib_fn   = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_est.labels_num_nocalib.csv'
+        trn_label_cat_true_fn      = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_true.labels_cat.csv'
+        trn_label_cat_est_fn       = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trn_est.labels_cat.csv'
+        trn_norm_fn       = f'{path_prefix}.{self.num_classes}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.normilzation.csv'
 
         
         # save model to file
@@ -1464,13 +1350,7 @@ class CnnTrainer(Trainer):
                                       'sd':self.num_msd[1]})
             df_labels.to_csv(trn_labels_num_norm_fn, index=False, sep=',',
                              float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
-    
-            # save CPI intervals
-            # df_cpi_intervals = pd.DataFrame(self.cpi_adjustments,
-            #                                 columns=self.param_num_names)
-            # df_cpi_intervals.to_csv(model_cpi_fn,
-            #                         index=False, sep=',',
-            #                         float_format=util.PANDAS_FLOAT_FMT_STR, mode=write_mode)
+
             
             # downsample all true training labels
             df_trn_label_true = pd.DataFrame(self.train_label_num_true,
@@ -1515,7 +1395,6 @@ class CnnTrainer(Trainer):
     
         if self.has_label_cat:
             # save true values for train categ. labels
-            print("end", self.train_label_cat_true)
             print(self.param_cat_names)
             df_trn_label_cat_true = pd.DataFrame(self.train_label_cat_true,
                                                    columns=self.param_cat_names )
@@ -1564,23 +1443,6 @@ class CnnTrainer(Trainer):
         
         for i in range(ests.shape[2]):
             if asymmetric:
-                # Asymmetric non-comformity score
-                lower_s = np.array(true[:,i] - ests[0][:,i])
-                upper_s = np.array(true[:,i] - ests[1][:,i])
-                lower_p = (1 - inner_quantile)/2 * (1 + 1/ests.shape[1])
-                upper_p = (1 + inner_quantile)/2 * (1 + 1/ests.shape[1])
-                if lower_p < 0.:
-                    self.logger.write_log('trn',
-                                          'get_cqr_constant: lower_p >= 0.')
-                    lower_p = 0.
-                if upper_p > 1.:
-                    self.logger.write_log('trn',
-                                          'get_cqr_constant: upper_p <= 1.')
-                    upper_p = 1.
-                lower_q = np.quantile(lower_s, lower_p)
-                upper_q = np.quantile(upper_s, upper_p)
-            else:
-                # Symmetric non-comformity score
                 s = np.amax(np.array((ests[0][:,i]-true[:,i], true[:,i]-ests[1][:,i])), axis=0)
                 # get adjustment constant: 1 - alpha/2's quantile of non-comformity scores
                 symm_p = inner_quantile * (1 + 1/ests.shape[1])
