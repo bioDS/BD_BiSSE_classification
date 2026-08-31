@@ -531,7 +531,7 @@ class CnnTrainer(Trainer):
         total_num_count = 0
         self.num_node_features = 3 # 3
         total_attr_sum = torch.zeros(self.num_node_features)
-        total_attr_sq_sum = 0
+        total_attr_sq_sum = torch.zeros(self.num_node_features)
         total_attr_count = 0
         total_aux_sum = torch.zeros(16)
         total_aux_sq_sum = torch.zeros(16)
@@ -559,6 +559,7 @@ class CnnTrainer(Trainer):
                 total_num_sq_sum += labels_num ** 2
                 total_num_count += labels_num.shape[0]
                 total_attr_sum += x.sum(dim=0)
+                total_attr_sq_sum += (x ** 2).sum(dim=0)
                 total_attr_count += x.shape[0]
                 total_aux_sum += aux.squeeze(0)
                 total_aux_sq_sum += (aux.squeeze(0) ** 2)
@@ -691,7 +692,7 @@ class CnnTrainer(Trainer):
         
         return loss_func
 
-    def evaluate(self, dataset, loss_func):
+    def evaluate(self, dataset, loss_func, type="train"):
         self.model.eval()
 
         total_loss = 0.0
@@ -716,9 +717,28 @@ class CnnTrainer(Trainer):
                     ).to(self.TORCH_DEVICE)
 
                     for g in batch:
-                        g.x = util.normalize(g.x, self.attr_msd)
-                        g.lbl_num = util.normalize(g.lbl_num, self.num_msd)
-                        g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
+                        if type == "val":
+                            g.x = util.normalize(g.x, self.attr_msd)
+                            g.lbl_num = util.normalize(g.lbl_num, self.num_msd)
+                            g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
+
+                        if not torch.isfinite(g.x).all():
+                            print("BAD g.x")
+                            print("idx:", g.idx)
+                            print("x min/max:", g.x.min(), g.x.max())
+                            raise RuntimeError()
+
+                        if not torch.isfinite(g.lbl_num).all():
+                            print("BAD g.lbl_num")
+                            print("idx:", g.idx)
+                            print("lbl_num:", g.lbl_num)
+                            raise RuntimeError()
+
+                        if not torch.isfinite(g.aux_dat).all():
+                            print("BAD g.aux_dat")
+                            print("idx:", g.idx)
+                            print("aux_dat:", g.aux_dat)
+                            raise RuntimeError()
 
                    
                     outputs = self.model(batch)
@@ -735,32 +755,6 @@ class CnnTrainer(Trainer):
                     total_correct += int(
                         (amax == labels.flatten()).sum()
                     )
-                    #print("idx", [g.idx for g in batch])
-                    #print("cat", [g.lbl_cat for g in batch])
-                    #print("aux data", [g.aux_dat for g in batch])
-                    pred_class = preds.argmax(dim=1)
-                    probs=torch.softmax(preds, dim=1)
-                    prob_list.append(probs)
-                    pred_list.append(pred_class)
-                    #print("aux data", [g.aux_dat for g in batch])
-                    pred_class = preds.argmax(dim=1)
-                    probs=torch.softmax(preds, dim=1)
-                    prob_list.append(probs)
-                    pred_list.append(pred_class)
-                    pred_class = preds.argmax(dim=1)
-                    probs=torch.softmax(preds, dim=1)
-                    prob_list.append(probs)
-                    pred_list.append(pred_class)
-                    label_list.append(labels)
-                    #print("last batch mean pred", pred_class.float().mean().item())
-        probs = torch.cat(prob_list)
-        preds = torch.cat(pred_list)
-        labels = torch.cat(label_list)
-        print("mean P(class 1):", probs[:,1].mean().item(), "std", probs[:,1].std(unbiased=False).item())
-        all_delta = torch.cat(all_delta)
-        print("delta:", all_delta.mean().item(), delta.std(unbiased=False).item(),
-              all_delta.min().item(), all_delta.max().item())
-        print("bin pred", torch.bincount(preds), "bin labels", torch.bincount(labels))
         return total_loss / total_n, total_correct / total_n
 
     def get_reg_loss(self):
@@ -1057,7 +1051,7 @@ class CnnTrainer(Trainer):
                 
                 val_loss, val_acc = self.evaluate(
                 self.val_dataset,
-                loss_categ_func
+                loss_categ_func, type="val"
                 )
                 val_loss_combined = val_loss #+ reg_loss
 
@@ -1077,6 +1071,21 @@ class CnnTrainer(Trainer):
 
             # changes in training metrics between epochs
                 if i > 0:
+
+                    diff_trn_loss = trn_loss_combined - prev_trn_loss_combined
+                    diff_val_loss = val_loss_combined - prev_val_loss_combined
+                    print("diff val loss", diff_val_loss)
+                    if (prev_trn_loss_combined == 0):
+                        rat_trn_loss = 100
+                    else:
+                        rat_trn_loss  = 100 * round(trn_loss_combined / prev_trn_loss_combined - 1.0, ndigits=4)
+                    if (prev_val_loss_combined == 0):
+                        rat_val_loss = 100
+                    else:
+                        rat_val_loss  = 100 * round(val_loss_combined / prev_val_loss_combined - 1.0, ndigits=4)
+
+                    diff_trn_loss_str = '{0:+.4f}'.format(diff_trn_loss)
+                    diff_val_loss_str = '{0:+.4f}'.format(diff_val_loss)
                     
                     rat_trn_loss_str  = '{0:+.2f}'.format(rat_trn_loss).rjust(4, ' ')
                     rat_val_loss_str  = '{0:+.2f}'.format(rat_val_loss).rjust(4, ' ')

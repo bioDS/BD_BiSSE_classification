@@ -28,6 +28,11 @@ def run():
         import phyddle.format as fmt
         my_fmt = fmt.load(my_args)
         my_fmt.run()
+    
+    if 'N' in step:
+        import phyddle.train_numerical_to_categorical as trn_n_to_c
+        my_trn_n_to_c = trn_n_to_c.load(my_args)
+        my_trn_n_to_c.run()
 
     # Step 3: train network with training data
     if 'T' in step:
@@ -44,7 +49,11 @@ def run():
         # my_fmt.encode_one(tmp_fn=est_prefix, idx=-1, mode='emp', save_phyenc_csv=True)
         my_est = est.load(my_args)
         my_est.run()
-
+    if 'G' in step:
+        import phyddle.format as fmt
+        import phyddle.get_graph_embeddings as graph
+        my_graph = graph.load(my_args)
+        my_graph.run()
     # Step 5: plot results
     if 'P' in step:
         import phyddle.plot as plt

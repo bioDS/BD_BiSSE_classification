@@ -465,7 +465,8 @@ class Formatter:
                                         'lbl': i[8]}
                # print("aux:",i[7])
 #         return idx, cpvs_data, node_attr, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
-                if i[6] != i[2].shape[1]:
+                if i[6] != i[2].shape[0]:
+                    print(i[6])
                     print(i[2].shape)
                     print("MISSMATCH!")
                     quit()

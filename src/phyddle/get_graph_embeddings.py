@@ -199,8 +199,7 @@ class GraphEmbeddingFinder:
         self.est_labels_num              = None       # init in make_results()
         self.mymodel                     = None       # init in make_results()
         self._trn_path_prefix            = None       # cached by get_trn_path_prefix()
-        self.estimate_dataset             = None       # init in load_format_input()
-        self.blocks                      = None       # init in load_format_input()
+        self.estimate_datasets            = None       # init in load_format_input()
 
         self.num_sample = -1
 
@@ -386,39 +385,59 @@ class GraphEmbeddingFinder:
     def load_format_input(self):
         """Set up block-wise loading of input data for estimation.
 
-        Rather than reading the entire test/estimate HDF5 file into memory at
-        once, this builds an HDF5BlockDataset (the same class Train uses)
-        over the file, split into contiguous blocks of `self.block_size`
+        Format writes the full simulated dataset out as two separate HDF5
+        files: `{fmt_prefix}.train.hdf5` (the examples used during Training)
+        and `{fmt_prefix}.test.hdf5` (the held-out examples). To get
+        embeddings for every graph in the full dataset, this builds an
+        HDF5BlockDataset (the same class Train uses) over each file
+        separately, split into contiguous blocks of `self.block_size`
         graphs. Each block is only read from disk when it's requested (see
         make_results()), so peak memory use is bounded by block_size rather
         than the full dataset size.
 
         """
 
-        short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
-        hdf5_fn = f'{short_path_prefix}.hdf5'
+        self.estimate_datasets = []
+        self.num_sample = 0
 
-        # only need the total number of graphs up front, to build blocks;
-        # everything else is read lazily by HDF5BlockDataset
-        with h5py.File(hdf5_fn, 'r') as f:
-            N = f['phy_data'].shape[0]
+        for data_str in ['train', 'test']:
+            hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.hdf5'
 
-        self.num_sample = N
+            if not os.path.exists(hdf5_fn):
+                util.print_warn(f'Could not find {hdf5_fn}; skipping.')
+                continue
 
-        # build contiguous blocks covering every graph in the dataset (no
-        # shuffling needed here, unlike training)
-        self.blocks = [np.arange(i, min(i + self.block_size, N))
-                        for i in range(0, N, self.block_size)]
+            # only need the total number of graphs up front, to build
+            # blocks; everything else is read lazily by HDF5BlockDataset
+            with h5py.File(hdf5_fn, 'r') as f:
+                N = f['phy_data'].shape[0]
 
-        util.print_str(f'  ▪ {N} test examples split into '
-                       f'{len(self.blocks)} block(s) of up to {self.block_size}',
-                       self.verbose)
+            # build contiguous blocks covering every graph in this file (no
+            # shuffling needed here, unlike training)
+            blocks = [np.arange(i, min(i + self.block_size, N))
+                      for i in range(0, N, self.block_size)]
 
-        self.estimate_dataset = HDF5BlockDataset(hdf5_fn, self.blocks, self)
+            util.print_str(f'  ▪ {N} {data_str} examples split into '
+                           f'{len(blocks)} block(s) of up to {self.block_size}',
+                           self.verbose)
 
-        # small metadata that HDF5BlockDataset already reads fully into RAM
-        self.label_names = self.estimate_dataset.label_names
-        self.aux_data_names = self.estimate_dataset.aux_data_names
+            dataset = HDF5BlockDataset(hdf5_fn, blocks, self)
+            self.estimate_datasets.append((data_str, dataset))
+            self.num_sample += N
+
+        if len(self.estimate_datasets) == 0:
+            util.print_err(f'No train/test HDF5 files found under '
+                           f'{self.fmt_dir}/{self.fmt_prefix}.*.hdf5', exit=True)
+
+        util.print_str(f'  ▪ {self.num_sample} total examples across '
+                       f'{len(self.estimate_datasets)} file(s)', self.verbose)
+
+        # small metadata that HDF5BlockDataset already reads fully into RAM;
+        # taken from whichever dataset was built first (train/test share the
+        # same label_names/aux_data_names by construction)
+        first_dataset = self.estimate_datasets[0][1]
+        self.label_names = first_dataset.label_names
+        self.aux_data_names = first_dataset.aux_data_names
 
         # done
         return
@@ -449,66 +468,76 @@ class GraphEmbeddingFinder:
 
         handle = self.mymodel.phy_std.gconv4.register_forward_hook(self.hook_fn)
 
-        n_blocks = len(self.estimate_dataset)
+        total_blocks = sum(len(dataset) for _, dataset in self.estimate_datasets)
 
         with torch.no_grad():
-            for j in tqdm(range(n_blocks), total=n_blocks, desc='Blocks'):
+            pbar = tqdm(total=total_blocks, desc='Blocks')
+            for data_str, dataset in self.estimate_datasets:
+                for j in range(len(dataset)):
 
-                # read one block of graphs from disk
-                graph_list = self.estimate_dataset[j]
+                    # read one block of graphs from disk
+                    graph_list = dataset[j]
 
-                # further split the block into forward-pass-sized batches
-                loader = DataListLoader(graph_list, batch_size=self.est_batch_size)
+                    # further split the block into forward-pass-sized batches
+                    loader = DataListLoader(graph_list, batch_size=self.est_batch_size)
 
-                for batch in loader:
+                    for batch in loader:
 
-                    # standardize inputs using the training set's mean/sd,
-                    # exactly as done during training
-                    for g in batch:
-                        if self.train_attr_data_mean_sd is not None:
-                            g.x = util.normalize(g.x, self.train_attr_data_mean_sd)
-                        if self.train_aux_data_mean_sd is not None:
-                            g.aux_dat = util.normalize(g.aux_dat, self.train_aux_data_mean_sd)
+                        # standardize inputs using the training set's mean/sd,
+                        # exactly as done during training
+                        for g in batch:
+                            if self.train_attr_data_mean_sd is not None:
+                                g.x = util.normalize(g.x, self.train_attr_data_mean_sd)
+                            if self.train_aux_data_mean_sd is not None:
+                                g.aux_dat = util.normalize(g.aux_dat, self.train_aux_data_mean_sd)
 
-                    n_before = len(self.embeddings)
+                        n_before = len(self.embeddings)
 
-                    batched = GeoBatch.from_data_list(batch)
+                        batched = GeoBatch.from_data_list(batch)
 
-                    _ = self.mymodel(batched)
+                        _ = self.mymodel(batched)
 
-                    batch_idx = [g.idx.item() if torch.is_tensor(g.idx) else g.idx
-                                 for g in batch]
+                        batch_idx = [g.idx.item() if torch.is_tensor(g.idx) else g.idx
+                                     for g in batch]
 
-                    if len(self.embeddings) > n_before:
-                        util.print_str(
-                            f'Block {j}, embedding shape: {self.embeddings[-1].shape}',
-                            self.verbose)
+                        if len(self.embeddings) > n_before:
+                            util.print_str(
+                                f'{data_str} block {j}, embedding shape: '
+                                f'{self.embeddings[-1].shape}',
+                                self.verbose)
 
-                        # gconv4's output is one row per NODE (not per
-                        # graph), stacked across every graph in this batch.
-                        # batched.batch tells us which graph each row
-                        # belongs to (0-indexed, in the same order as
-                        # `batch`/`batch_idx`), so split the node-level
-                        # output back out per graph.
-                        node_emb = self.embeddings[-1]
-                        node_batch_assign = batched.batch.cpu()
-                        node_counts = torch.bincount(
-                            node_batch_assign, minlength=len(batch_idx)
-                        ).tolist()
-                        per_graph_node_emb = torch.split(node_emb, node_counts, dim=0)
+                            # gconv4's output is one row per NODE (not per
+                            # graph), stacked across every graph in this batch.
+                            # batched.batch tells us which graph each row
+                            # belongs to (0-indexed, in the same order as
+                            # `batch`/`batch_idx`), so split the node-level
+                            # output back out per graph.
+                            node_emb = self.embeddings[-1]
+                            node_batch_assign = batched.batch.cpu()
+                            node_counts = torch.bincount(
+                                node_batch_assign, minlength=len(batch_idx)
+                            ).tolist()
+                            per_graph_node_emb = torch.split(node_emb, node_counts, dim=0)
 
-                        for g_idx, g_emb in zip(batch_idx, per_graph_node_emb):
-                            # flatten this graph's [num_nodes, hidden_dim]
-                            # embedding into a single 1-D vector
-                            graph_records.append((g_idx, g_emb.reshape(-1)))
+                            for g_idx, g_emb in zip(batch_idx, per_graph_node_emb):
+                                # flatten this graph's [num_nodes, hidden_dim]
+                                # embedding into a single 1-D vector
+                                graph_records.append((g_idx, g_emb.reshape(-1)))
 
-                    graph_idx_out.extend(batch_idx)
+                        graph_idx_out.extend(batch_idx)
+
+                    pbar.update(1)
+            pbar.close()
 
         handle.remove()
 
+        # tag output filenames with the Train path_prefix (model config) so
+        # embeddings from different trained models don't overwrite each other
+        trn_path_prefix_base = os.path.basename(self.get_trn_path_prefix())
+
         # save the raw, un-padded embeddings (one tensor per block) as well,
         # for anyone who wants the unprocessed node-level output
-        raw_out_fn = f'{self.est_dir}/{self.est_prefix}.graph_embeddings.pkl'
+        raw_out_fn = f'{self.est_dir}/{self.est_prefix}.{trn_path_prefix_base}.graph_embeddings.pkl'
         with open(raw_out_fn, 'wb') as f:
             pickle.dump({'idx': graph_idx_out, 'embeddings': self.embeddings}, f)
         util.print_str(f'  ▪ Wrote raw graph embeddings to {raw_out_fn}', self.verbose)
@@ -516,7 +545,7 @@ class GraphEmbeddingFinder:
         # build a dataframe with one row per graph: flattened node
         # embeddings, zero-padded to the length of the largest graph
         df = self.build_embedding_dataframe(graph_records)
-        df_out_fn = f'{self.est_dir}/{self.est_prefix}.graph_embeddings.csv'
+        df_out_fn = f'{self.est_dir}/{self.est_prefix}.{trn_path_prefix_base}.graph_embeddings.csv'
         df.to_csv(df_out_fn, index=False)
         util.print_str(f'  ▪ Wrote padded per-graph embedding dataframe '
                        f'({df.shape[0]} graphs x {df.shape[1]-1} features) '

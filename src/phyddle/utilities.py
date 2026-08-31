@@ -175,15 +175,11 @@ def settings_registry():
         'aux_data':         {'step':'FTEP', 'type': list, 'section':'Format', 'default':[], 'help':'aux data labels, this option needs to be set manually and code should be updated to automate this'},
 
         # training options
-        'network_type':         {'step':'TEP',      'type': str,    'section':'Train', 'default':'CNN',             'help': 'CNN or GNN architecture'},
         'num_epochs':           {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 50,             'help': 'Number of training epochs'},
         'num_early_stop':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 3,              'help': 'Number of consecutive validation loss gains before early stopping'},
         'trn_batch_size':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 512,            'help': 'Training batch sizes'},
         'prop_test':            {'step': 'FT',     'type': float,  'section': 'Train',  'default': 0.05,           'help': 'Proportion of data used as test examples (assess trained network performance)'},
-        'prop_val':             {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.05,           'help': 'Proportion of data used as validation examples (diagnose network overtraining)'},
-        'prop_cal':             {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.20,           'help': 'Proportion of data used as calibration examples (calibrate CPIs)'},
-        'cpi_coverage':         {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.95,           'help': 'Expected coverage percent for calibrated prediction intervals (CPIs)'},
-        'cpi_asymmetric':       {'step': 'T',      'type': str,    'section': 'Train',  'default': 'T',            'help': 'Use asymmetric (True) or symmetric (False) adjustments for CPIs?', 'bool': True},
+        'n_val_blocks':             {'step': 'T',      'type': int,  'section': 'Train',  'default': 1,           'help': 'Number of blocks used as validation examples (diagnose network overtraining)'},
         'loss_numerical':       {'step': 'T',      'type': str,    'section': 'Train',  'default': 'mse',          'help': 'Loss function for real value estimates', 'choices': ['mse', 'mae']},
         'optimizer':            {'step': 'TP',      'type': str,    'section': 'Train',  'default': 'adam',         'help': 'Method used for optimizing neural network', 'choices': ['adam', 'adadelta', 'adagrad', 'adamw', 'rmsprop', 'sgd']},
         'learning_rate':        {'step': 'TEP',      'type': float,  'section': 'Train',  'default': 0.001,          'help': 'Learning rate for optimizer'},
@@ -204,7 +200,13 @@ def settings_registry():
         'phylo_pool':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use phylo pooling instead of average pooling', 'bool': True},
         'graph_conv':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use GraphConv instead of GCNConv', 'bool': True},
         'regularisation': {'step': 'TEP', 'type':str, 'section':'Train', 'default':'NA', 'help':'Apply L1 or L2 regularisation'},
-
+        'block_size': {'step':'T', 'type':int, 'section':'Train', 'default':1000, 'help':'number of graphs to load in one go'},
+        'dataset_size': {'step': 'T', 'type':int, 'section':'Train', 'default':-1, 'help':'number of trees to use from dataset. -1 uses the full dataset'},
+        'dropout':             {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.01,           'help': 'Dropout probability in graph neural network'},
+        'accumulation_steps':             {'step': 'T',      'type': int,  'section': 'Train',  'default': 1,           'help': 'Number of actual mini-batches to treat as one mini-batch (to cope with memory constraints)'},
+        'extra_layers': {'step':'T', 'type':bool, 'section': 'Train', 'default':False, 'help':'whether to try a deeper neural network'},
+        'n_layers_avg': {'step':'T','type':int,'section':'Train','default':4, 'help':'default graph convolutional layers for GNN-avg'},
+        'n_layers_phylo' : {'step':'T', 'type':int,'section':'Train','default':3,'help':'default graph convolutional layers for GNN-phylo'},
 
 
         # estimating options
@@ -610,6 +612,7 @@ def set_step_args(args):
         'fmt': 'format',
         'trn': 'train',
         'est': 'estimate',
+        'graph': 'get_graph_embeddings',
         'plt': 'plot',
         'log': 'log'
     }
@@ -640,8 +643,8 @@ def check_args(args):
     # links to user facing documentation
 
     # string values
-    if not all([s in 'ASFTEP' for s in args['step']]):
-        print_err("step must contain only letters 'ASFTEP'", exit=True)
+    if not all([s in 'ASFTEPNG' for s in args['step']]):
+        print_err("step must contain only letters 'ASFTEPNG'", exit=True)
     if args['sim_logging'] not in ['clean', 'verbose', 'compress']:
         print_err("sim_logging must be 'clean', 'verbose', or 'compress'",
                   exit=True)
@@ -691,18 +694,14 @@ def check_args(args):
         print_err("trn_batch_size must be > 0", exit=True)
     if args['sim_batch_size'] <= 0:
         print_err("sim_batch_size must be > 0", exit=True)
-    if args['cpi_coverage'] < 0. or args['cpi_coverage'] > 1.:
-        print_err("cpi_coverage must be between 0 and 1", exit=True)
     if args['warn_aux_outlier'] < 0. or args['warn_aux_outlier'] > 1.:
         print_err("warn_aux_outlier must be between 0 and 1", exit=True)
     if args['warn_lbl_outlier'] < 0. or args['warn_lbl_outlier'] > 1.:
         print_err("warn_lbl_outlier must be between 0 and 1", exit=True)
     if args['prop_test'] < 0. or args['prop_test'] > 1.:
         print_err("prop_test must be between 0 and 1", exit=True)
-    if args['prop_val'] < 0. or args['prop_val'] > 1.:
-        print_err("prop_val must be between 0 and 1", exit=True)
-    if args['prop_cal'] < 0. or args['prop_cal'] > 1.:
-        print_err("prop_cal must be between 0 and 1", exit=True)
+    if args['n_val_blocks'] < 0.:
+        print_err("n_val_blocks must be at least 0", exit=True)
     if args['plot_pca_noise'] < 0.:
         print_err("plot_pca_noise must be >= 0", exit=True)
         
@@ -1158,7 +1157,7 @@ def sorted_nicely(l):
 # FILE HELPERS #
 ################
 
-def read_csv_as_pandas(fn):
+def read_csv_as_pandas(fn, header = 0):
     """Reads a CSV file into a pandas DataFrame.
 
     Args:
@@ -1170,7 +1169,7 @@ def read_csv_as_pandas(fn):
     """
     df = None
     if os.path.exists(fn):
-        df = pd.read_csv(fn)
+        df = pd.read_csv(fn, header=header)
         if len(df.columns) == 0:
             df = None
 
@@ -2328,6 +2327,7 @@ class Logger:
             'fmt': f'{self.base_fp}.format.log',
             'trn': f'{self.base_fp}.train.log',
             'est': f'{self.base_fp}.estimate.log',
+            'graph': f'{self.base_fp}.graph.log',
             'plt': f'{self.base_fp}.plot.log'
         }
 
@@ -2739,9 +2739,6 @@ class Logger:
 #     'num_epochs'        : 20,               # number of training intervals (epochs)
 #     'prop_test'         : 0.05,             # proportion of sims in test dataset
 #     'prop_validation'   : 0.05,             # proportion of sims in validation dataset
-#     'prop_calibration'  : 0.20,             # proportion of sims in CPI calibration dataset
-#     'cpi_coverage'      : 0.95,             # coverage level for CPIs
-#     'cpi_asymmetric'    : True,             # upper/lower (True) or symmetric (False) CPI adjustments
 #     'batch_size'        : 128,              # number of samples in each training batch
 #     'loss'              : 'mse',            # loss function for learning
 #     'optimizer'         : 'adam',           # optimizer for network weight/bias parameters
