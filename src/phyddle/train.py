@@ -717,10 +717,10 @@ class CnnTrainer(Trainer):
                     ).to(self.TORCH_DEVICE)
 
                     for g in batch:
-                        if type == "val":
-                            g.x = util.normalize(g.x, self.attr_msd)
-                            g.lbl_num = util.normalize(g.lbl_num, self.num_msd)
-                            g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
+                        #if type == "val":
+                        g.x = util.normalize(g.x, self.attr_msd)
+                        g.lbl_num = util.normalize(g.lbl_num, self.num_msd)
+                        g.aux_dat = util.normalize(g.aux_dat, self.aux_msd)
 
                         if not torch.isfinite(g.x).all():
                             print("BAD g.x")
@@ -1168,10 +1168,10 @@ class CnnTrainer(Trainer):
                 print(f'Early stop: training loss was at least 0.69 for 20 consecutive epochs')
                 history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
                 break
-            if self.epochs_since >= 20:
-                print(f'Early stop: lowest validation loss was 20 epochs ago')
-                history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
-                break
+            #if self.epochs_since >= 20:
+            #    print(f'Early stop: lowest validation loss was 20 epochs ago')
+            #    history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
+             #   break
         history_plot_fn = f'{path_prefix}.{self.dataset_size}.{self.effective_batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.png'
         # plt.savefig(history_plot_fn)
         # plt.close()
