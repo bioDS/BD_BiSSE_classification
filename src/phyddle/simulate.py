@@ -252,6 +252,17 @@ class Simulator:
         
         # dispatch jobs
         util.print_str('▪ Simulating raw data', verbose)
+
+        # ChatGPT code
+        n_per_bin = len(self.rep_idx) // len(self.bins_end)
+        tasks = []
+        rep = self.start_idx
+        for batch_start in range(0, n_per_bin, self.sim_batch_size):
+            for bin_start, bin_end in zip(self.bins_start, self.bins_end):
+                this_batch = min(self.sim_batch_size, n_per_bin - batch_start)
+                for _ in range(this_batch):
+                    tasks.append((rep, bin_start, bin_end))
+                    rep += 1
         if self.use_parallel:
             # parallel jobs
             # Note, it's critical to call this as list(tqdm(pool.imap(...)))
@@ -264,19 +275,19 @@ class Simulator:
             # - worth testing more, though
             with Pool(processes=self.num_proc) as pool:
                 res = list(
-                     tqdm(pool.imap(self.sim_one, zip(self.rep_idx, self.bins_start, self.bins_end),
+                     tqdm(pool.imap(self.sim_one, tasks,
                         chunksize=1),
-                        total=len(self.rep_idx),
-                        desc='Simulating',
+                        total=len(tasks),
+                        desc='Simulating in parallel',
                         smoothing=0)
                      )
             
-        else:
-            # serial jobs
-            res = [ self.sim_one(idx, k) for idx, k in tqdm(zip(self.rep_idx, self.bins_start, self.bins_end),
-                                                      total=len(self.rep_idx),
-                                                      desc='Simulating',
-                                                      smoothing=0) ]
+        # else:
+        #     # serial jobs
+        #     res = [ self.sim_one(idx, k) for idx, k in tqdm(zip(self.rep_idx, self.bins_start, self.bins_end),
+        #                                               total=len(self.rep_idx),
+        #                                               desc='Simulating in serial',
+        #                                               smoothing=0) ]
 
         # verify Simulate produced appropriate output for Format
         self.check_valid_output()

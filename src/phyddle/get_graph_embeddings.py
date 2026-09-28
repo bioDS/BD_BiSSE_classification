@@ -19,11 +19,13 @@ import pandas as pd
 import h5py
 import torch
 import pickle
+import csv
 
 from torch_geometric.data import Data as GeoData, Batch as GeoBatch
 from torch_geometric.loader import DataListLoader
 from torch_geometric.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch_geometric.nn import GCNConv
 
 
 import rpy2
@@ -312,6 +314,7 @@ class GraphEmbeddingFinder:
 
         """
         if self._trn_path_prefix is not None:
+            print("self trn path prefix", self._trn_path_prefix)
             return self._trn_path_prefix
 
         prefix_with_classes = (
@@ -320,7 +323,6 @@ class GraphEmbeddingFinder:
             f'{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.'
             f'{self.extra_layers}.{self.n_layers}.{self.learning_rate}.'
             f'{self.dropout}.{self.activation_func}.{self.regularisation}')
-
         if os.path.exists(f'{prefix_with_classes}.trained_model.pkl'):
             self._trn_path_prefix = prefix_with_classes
             return self._trn_path_prefix
@@ -331,7 +333,7 @@ class GraphEmbeddingFinder:
             f'{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.'
             f'{self.extra_layers}.{self.n_layers}.{self.learning_rate}.'
             f'{self.dropout}.{self.activation_func}.{self.regularisation}')
-
+        print("prefix without classes", prefix_without_classes)
         if os.path.exists(f'{prefix_without_classes}.trained_model.pkl'):
             util.print_warn(
                 f'Trained model not found at {prefix_with_classes}.trained_model.pkl; '
@@ -466,7 +468,33 @@ class GraphEmbeddingFinder:
         self.mymodel.to(self.TORCH_DEVICE)
         self.mymodel.eval()
 
-        handle = self.mymodel.phy_std.gconv4.register_forward_hook(self.hook_fn)
+        print(self.mymodel)
+        for name, module in self.mymodel.named_modules():
+            print(name, ":", module)
+        layers = list(self.mymodel.named_modules())
+
+        # Get all top-level layers in phy_std
+        layers = list(self.mymodel.phy_std.named_children())
+
+        # Find all GCNConv layers
+        gconv_layers = [
+            (name, module)
+            for name, module in layers
+            if isinstance(module, GCNConv)
+        ]
+
+        # Final GCN layer
+        name, final_gconv = gconv_layers[-1]
+
+        print("Final GCN layer:", name)
+        print(final_gconv)
+        # name, module = layers[-4]
+
+        # print("Layer name:", name)
+        # print("Layer:", module)
+
+
+        handle = final_gconv.register_forward_hook(self.hook_fn)
 
         total_blocks = sum(len(dataset) for _, dataset in self.estimate_datasets)
 
@@ -501,12 +529,12 @@ class GraphEmbeddingFinder:
                                      for g in batch]
 
                         if len(self.embeddings) > n_before:
-                            util.print_str(
-                                f'{data_str} block {j}, embedding shape: '
-                                f'{self.embeddings[-1].shape}',
-                                self.verbose)
+                            # util.print_str(
+                            #     f'{data_str} block {j}, embedding shape: '
+                            #     f'{self.embeddings[-1].shape}',
+                            #     self.verbose)
 
-                            # gconv4's output is one row per NODE (not per
+                            # The last graph convolutional layer's output is one row per NODE (not per
                             # graph), stacked across every graph in this batch.
                             # batched.batch tells us which graph each row
                             # belongs to (0-indexed, in the same order as
@@ -537,20 +565,34 @@ class GraphEmbeddingFinder:
 
         # save the raw, un-padded embeddings (one tensor per block) as well,
         # for anyone who wants the unprocessed node-level output
-        raw_out_fn = f'{self.est_dir}/{self.est_prefix}.{trn_path_prefix_base}.graph_embeddings.pkl'
+        raw_out_fn = f'{self.est_dir}/{trn_path_prefix_base}.graph_embeddings.pkl'
         with open(raw_out_fn, 'wb') as f:
             pickle.dump({'idx': graph_idx_out, 'embeddings': self.embeddings}, f)
         util.print_str(f'  ▪ Wrote raw graph embeddings to {raw_out_fn}', self.verbose)
 
         # build a dataframe with one row per graph: flattened node
         # embeddings, zero-padded to the length of the largest graph
-        df = self.build_embedding_dataframe(graph_records)
-        df_out_fn = f'{self.est_dir}/{self.est_prefix}.{trn_path_prefix_base}.graph_embeddings.csv'
-        df.to_csv(df_out_fn, index=False)
-        util.print_str(f'  ▪ Wrote padded per-graph embedding dataframe '
-                       f'({df.shape[0]} graphs x {df.shape[1]-1} features) '
-                       f'to {df_out_fn}', self.verbose)
+        # df = self.build_embedding_dataframe(graph_records)
+        df_out_fn = f'{self.est_dir}/{trn_path_prefix_base}.graph_embeddings.csv'
+        # df.to_csv(df_out_fn, index=False)
+        max_len = max(len(g_emb) for _, g_emb in graph_records)
+        n_graphs = len(graph_records)
+        report_every = max(1, n_graphs // 20)  # ~20 updates total
 
+        with open(df_out_fn, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['graph_idx'] + [f'f{i}' for i in range(max_len)])
+            for i, (g_idx, g_emb) in enumerate(graph_records):
+                row = np.zeros(max_len, dtype=np.float32)
+                flat = np.asarray(g_emb, dtype=np.float32)
+                row[:flat.shape[0]] = flat
+                writer.writerow([g_idx] + row.tolist())
+                if (i + 1) % report_every == 0 or (i + 1) == n_graphs:
+                    util.print_str(f'    ... wrote {i + 1}/{n_graphs} graphs', self.verbose)
+
+        util.print_str(f'  ▪ Wrote padded per-graph embedding dataframe '
+                    f'({n_graphs} graphs x {max_len} features) '
+                    f'to {df_out_fn}', self.verbose)
         # done
         return
 

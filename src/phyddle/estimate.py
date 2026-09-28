@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+import math
 sys.stdout.reconfigure(line_buffering=True)
 
 # external imports
@@ -31,19 +32,22 @@ import h5py
 import torch
 import subprocess, pickle
 
-from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch as GeoBatch
-# from torch_geometric.loader import DataLoader
+from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch
+from torch_geometric.loader import DataLoader as GeoLoader, DataListLoader
 from torch.utils.data import DataLoader
 from torch_geometric.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from phyddle import train
+# from train import HDF5BlockDataset
+import torch.distributed as dist
+from torch import linalg as LA
 
 import rpy2
 import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr, data
 r = robjects.r
-r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
-get_mle = r['get_mle_label']
+# r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
+# get_mle = r['get_mle_label']
 
 
 
@@ -68,75 +72,6 @@ def custom_collate(batch):
         torch.stack(lbl_cat)
     )
 
-# ##################################################
-# class Dataset(Geoset):
-#     """
-#     Dataset class for training. It is used by torch.utils.data.DataLoader to
-#     generate training batches for the training loop. Training examples include
-#     phylogenetic-state tensors, auxiliary data tensors, and labels.
-#     """
-#     # Constructor
-#     def __init__(self, phy_data, node_data, edges_data, aux_data, idx_data, labels_num, labels_cat, graph_ids, num_nodes, num_edges):
-#         self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
-#         self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
-#         self.idx_data    = torch.from_numpy(idx_data.astype('int'))
-#         self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
-#         self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
-#         self.len         = len(self.labels_num) #self.labels_num.shape[0]
-
-
-
-#         edges_data = torch.from_numpy(edges_data.astype('int'))
-#         min_index =   edges_data.min()
-#         edges_data = torch.sub(edges_data, min_index)
-#         unique = torch.unique(edges_data)
-#         all = torch.arange(edges_data.max()+1)
-#         difference = all[torch.isin(all, unique, invert=True)]
-#         reduction = torch.searchsorted(difference, all, right=False)
-#         edges_data=  torch.sub(edges_data, reduction[edges_data])
-#         #self.graph_data = GeoData(x=torch.transpose(torch.from_numpy(node_data).view(1,-1),0,1).float(), edge_index=edges_data, y=labels_cat)
-#         self.graph_dat = []
-#         self.id_list = graph_ids
-#         i = 0
-#         num_nodes = num_nodes.astype(int)
-#         num_edges = num_edges.astype(int)
-#         if num_nodes[0] != num_edges[0] + 1:
-#             print("nodes:", num_nodes)
-#             print("edges:", num_edges)
-#             quit()
-#         prev_edge_ind = 0
-#         prev_node_ind = 0
-#         for i in range(len(graph_ids)):
-#             current_edge_ind = prev_edge_ind + num_edges[i].astype(int)[0]
-#             current_node_ind = prev_node_ind + num_nodes[i].astype(int)[0]
-
-#             selected_nodes = node_data[prev_node_ind:current_node_ind]
-#             selected_edges = edges_data[:, prev_edge_ind:current_edge_ind]
-
-
-        
-#             if (selected_nodes.shape[0] != selected_edges.shape[1] + 1):
-#                 print("MISMATCH!!!!")
-#                 quit()
-#             self.graph_dat.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges, y=labels_cat[i]))#, phy_data=self.phy_data, aux_data=self.aux_data))
-#             prev_edge_ind = current_edge_ind
-#             prev_node_ind = current_node_ind
-#         # print("self graph dat")
-#         # print(self.graph_dat)
-
-#     # Getting the data
-#     def __getitem__(self, index):
-#         #print("getting graph  index", str(index), ":",self.graph_dat[index] )
-#         #return (#self.phy_data[index], self.graph_dat[index], #[index],
-#                 #self.aux_data[index], self.idx_data[index],
-#                 #self.labels_num[index], self.labels_cat[index])
-#         return(self.graph_dat[index], self.idx_data[index],
-#                 self.labels_num[index], self.labels_cat[index])
-    
-#     # Getting length of the data
-#     def __len__(self):
-#         return self.len
-
 def load(args):
     """Load an Estimator object.
 
@@ -155,19 +90,6 @@ def load(args):
     else:
         return NotImplementedError
 
-# class GraphOnlyWrapper(torch.nn.Module):
-#     def __init__(self, model):
-#         super().__init__()
-#         self.model = model
-
-#     def forward(self, data, *args, **kwargs):
-#         # Ignore all non-graph arguments from DataLoader
-#         return self.model(data)
-
-##################################################
-
-
-
 
 
 class Estimator:
@@ -185,6 +107,7 @@ class Estimator:
             args (dict): Contains phyddle settings.
             
         """
+        self.args = args
         
         # settings
         self.verbose            = bool(args['verbose'])
@@ -218,6 +141,8 @@ class Estimator:
         self.use_cuda           = bool(args['use_cuda'])
 
         self.regularisation = str(args['regularisation'])
+        self.block_size = int(args['block_size'])
+
 
         
         # error checking
@@ -228,8 +153,20 @@ class Estimator:
 
         self.phylo_pool         =bool(args['phylo_pool'])
         self.graph_conv         =bool(args['graph_conv'])
-        self.phy_hidden_size = int(args['phy_hidden_size'])
+        self.hidden_size = int(args['phy_hidden_size'])
         self.optimizer          = str(args['optimizer'])
+        self.dropout = float(args['dropout'])
+        self.dataset_size = int(args['dataset_size'])
+        self.batch_size = int(args['accumulation_steps']) *  int(args['trn_batch_size'])
+        self.activation_func    = str(args['activation_func'])
+        self.extra_layers       =bool(args['extra_layers'])
+        self.phylo_n_layers     =int(args['n_layers_phylo'])
+        self.avg_n_layers       =int(args['n_layers_avg'])
+        self.n_layers = self.avg_n_layers
+        if self.phylo_pool:
+            self.n_layers = self.phylo_n_layers
+
+
         self.num_classes        =  int(args['num_classes'])
         self.scheduler="manual"
 
@@ -280,8 +217,12 @@ class Estimator:
         self.true_labels_cat            = None       # init in load_format_input()
         self.est_labels_num             = None       # init in make_results()
         self.mymodel                    = None       # init in make_results()
+        self.trainer = None
+        self.trn_batch_size     = int(args['trn_batch_size'])
+
 
         self.num_sample = -1
+
         
         # done
         return
@@ -406,7 +347,7 @@ class Estimator:
         elif self.has_valid_dataset(mode='sim'):
             # load input
             util.print_str('▪ Loading simulated test input', verbose)
-            self.load_format_input(mode='sim')
+            # self.load_format_input(mode='sim')
     
             # make estimates
             util.print_str('▪ Making simulated test estimates', verbose)
@@ -451,7 +392,7 @@ class Estimator:
         # done
         util.print_str('... done!', verbose)
 
-        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}'
+        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.dropout}.{self.activation_func}.{self.learning_rate}.{self.regularisation}'
         out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
         out_est_mle_vals_cat_fn = f'{path_prefix}_MLE_est.p_vals_cat.csv'
 
@@ -502,12 +443,7 @@ class Estimator:
                 labels[:,idx] = encoded_cats
                 idx_cat.append( idx )
                 self.param_cat_names.append(k)
-                
-            elif v == 'num':
-                self.has_label_num = True
-                # print(self.label_names)
-                idx_num.append( self.label_names.index(k) )
-                self.param_num_names.append(k)
+
         
         if not self.has_label_num and not self.has_label_cat:
             util.print_err(f"No training labels found.", exit=True)
@@ -515,7 +451,7 @@ class Estimator:
         # get data subsets
         labels_num = labels[:,idx_num].copy()
         labels_cat = labels[:,idx_cat].copy()
-
+        print("returning from sep labels")
         # done
         return labels_num, labels_cat
 
@@ -546,9 +482,6 @@ class Estimator:
 
         if self.tensor_format == 'hdf5':
             files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ] # {self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}
-        elif self.tensor_format == 'csv':
-            files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.phy_data.csv',
-             f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.aux_data.csv' ]
         # fail if key file missing
         for fn in files:
             if not os.path.exists(fn):
@@ -569,10 +502,11 @@ class Estimator:
             
         """
         # filesystem
-        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}'
-        train_norm_aux_data_fn = f'{path_prefix}.train_norm.aux_data.csv'
-        train_norm_labels_num_fn = f'{path_prefix}.train_norm.labels_num.csv'
-        model_cpi_fn = f'{path_prefix}.cpi_adjustments.csv'
+        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
+        train_norm_aux_data_fn = f'{path_prefix}.trn_norm.aux_data.csv'
+        train_norm_labels_num_fn = f'{path_prefix}.trn_norm.labels_num.csv'
+
+        # model_cpi_fn = f'{path_prefix}.cpi_adjustments.csv'
 
         # denormalization factors for new aux data
         train_aux_data_norm = pd.read_csv(train_norm_aux_data_fn, sep=',', index_col=False)
@@ -580,199 +514,9 @@ class Estimator:
         train_aux_data_sd = train_aux_data_norm['sd'].T.to_numpy().flatten()
         self.train_aux_data_mean_sd = (train_aux_data_means, train_aux_data_sd)
         
-        if self.has_label_num:
-            # denormalization factors for labels
-            train_norm_labels_num = pd.read_csv(train_norm_labels_num_fn, sep=',', index_col=False)
-            train_num_labels_mean = train_norm_labels_num['mean'].T.to_numpy().flatten()
-            train_num_labels_sd = train_norm_labels_num['sd'].T.to_numpy().flatten()
-            self.train_labels_num_mean_sd = (train_num_labels_mean, train_num_labels_sd)
-            
-            # read in CQR interval adjustments
-            self.cpi_adjustments = pd.read_csv(model_cpi_fn, sep=',', index_col=False).to_numpy()
-            
         # done
         return
 
-    def load_format_input(self, mode='sim'):
-        """Load input data for estimation.
-
-        This function loads the phy. data and aux. data tensors stored in the
-        Format job directory.
-        
-        Args:
-            mode (str): 'sim' or 'emp' for simulated or empirical analysis.
-            
-        """
-
-        assert mode in ['sim', 'emp']
-        
-        path_prefix = ''
-        if mode == 'sim':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
-            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
-        elif mode == 'emp':
-            path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical'
-            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
-        
-        # simulated test datasets for csv or hdf5
-        phy_data_fn = f'{path_prefix}.phy_data.csv'
-        aux_data_fn = f'{path_prefix}.aux_data.csv'
-        idx_data_fn = f'{path_prefix}.index.csv'
-        labels_fn = f'{path_prefix}.labels.csv'
-        hdf5_fn = f'{short_path_prefix}.hdf5'
-        
-        # load all the test dataset
-        phy_data = None
-        aux_data = None
-        idx_data = None
-        graph_data = None
-        labels = None
-        label_names = None
-        nodes_dist = None
-        node_1_data = None
-        node_2_data = None
-        if self.tensor_format == 'csv':
-            phy_data = pd.read_csv(phy_data_fn, header=None,
-                                        on_bad_lines='skip').to_numpy()
-            aux_data = pd.read_csv(aux_data_fn, header=None,
-                                        on_bad_lines='skip').to_numpy()
-            idx_data = pd.read_csv(idx_data_fn,
-                                        on_bad_lines='skip')
-            if mode == 'sim':
-                labels = pd.read_csv(labels_fn, header=None,
-                                            on_bad_lines='skip').to_numpy()
-                label_names = labels[0,:]
-                labels = labels[1:,:].astype('float64')
-            aux_data = aux_data[1:,:].astype('float64')
-            aux_data_names = aux_data[0,:]
-
-        elif self.tensor_format == 'hdf5':
-            hdf5_file = h5py.File(hdf5_fn, 'r')
-            phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
-            aux_data = pd.DataFrame(hdf5_file['aux_data']).to_numpy()
-            idx_data = pd.DataFrame(hdf5_file['idx'], columns=['idx']).to_numpy()
-            node_1_data = pd.DataFrame(hdf5_file['node_1'])#.to_numpy()
-            node_2_data = pd.DataFrame(hdf5_file['node_2'])#.to_numpy()
-            nodes_dist = pd.DataFrame(hdf5_file['node_attr']).to_numpy()
-            graph_ids = pd.DataFrame(hdf5_file['graph_id']).to_numpy()
-            num_nodes = pd.DataFrame(hdf5_file['num_nodes']).to_numpy()
-            num_edges = pd.DataFrame(hdf5_file['num_edges']).to_numpy()
-            self.label_names = [s.decode() for s in hdf5_file['label_names'][0,:] ]
-
-
-
-            # idx_data = idx_data[:,:].astype('int')
-            if mode == 'sim':
-                labels = pd.DataFrame(hdf5_file['labels']).to_numpy()
-            label_names = [ s.decode() for s in hdf5_file['label_names'][0,:] ]
-            aux_data_names = [ s.decode() for s in hdf5_file['aux_data_names'][0,:] ]
-            hdf5_file.close()
-        
-        edges_matrix = pd.concat((node_1_data, node_2_data), axis=1).to_numpy().T
-        node_attributes = nodes_dist #.flatten()
-
-        labels_num, labels_cat = self.separate_labels(labels)
-        self.num_sample = phy_data.shape[0]
-        phy_data.shape = (self.num_sample, -1, self.num_data_col)
-
-        unique_ids = np.unique(graph_ids)
-
-        self.estimate_dataset = network.Dataset(phy_data, node_attributes,
-                                             edges_matrix, aux_data,
-                                             idx_data,
-                                             labels_num,
-                                             labels_cat, unique_ids, num_nodes, num_edges)
-
-        # self.phy_data    = torch.from_numpy(np.transpose(phy_data, axes=[0,2,1]).astype('float32'))
-        # self.aux_data    = torch.from_numpy(aux_data.astype('float32'))
-        self.idx_data    = torch.from_numpy(idx_data.astype('int'))
-        # self.labels_num  = torch.from_numpy(labels_num.astype('float32'))
-        # self.labels_cat  = torch.from_numpy(labels_cat.astype('int'))
-
-        # edges_matrix = torch.from_numpy(edges_matrix.astype('int'))
-        # min_index =   edges_matrix.min()
-        # edges_matrix = torch.sub(edges_matrix, min_index)
-        # unique = torch.unique(edges_matrix)
-        # all_from_unique = torch.arange(edges_matrix.max()+1)
-        # difference = all_from_unique[torch.isin(all_from_unique, unique, invert=True)]
-        # reduction = torch.searchsorted(difference, all_from_unique, right=False)
-        # edges_matrix =  torch.sub(edges_matrix, reduction[edges_matrix])
-
-        # self.graph_data = []
-        # graph_ids = np.unique(graph_ids)
-        # self.id_list = graph_ids
-        # i = 0
-        # num_nodes = num_nodes.astype(int)
-        # num_edges = num_edges.astype(int)
-        # prev_edge_ind = 0
-        # prev_node_ind = 0
-
-        # for i in range(len(graph_ids)):
-
-        #     current_edge_ind = prev_edge_ind + int(num_edges[i])
-        #     current_node_ind = prev_node_ind + int(num_nodes[i])
-        #     selected_nodes = node_attributes[prev_node_ind:current_node_ind]
-        #     selected_edges = edges_matrix[:, prev_edge_ind:current_edge_ind]
-        
-        #     #print("i = ", i, "nodes", selected_nodes.shape, "edges", selected_edges.shape)
-        #     self.graph_data.append(GeoData(x=torch.transpose(torch.from_numpy(selected_nodes).view(1,-1),0,1).float(), edge_index=selected_edges))# y=labels_cat[i])#, phy_data=self.phy_data, aux_data=self.aux_data))
-        #     prev_edge_ind = current_edge_ind
-        #     prev_node_ind = current_node_ind
-
-        
-        # get number of samples
-
-        # reshape phylogenetic state tensor
-        # phy_data.shape = (num_sample, -1, self.num_data_col)
-        # phy_data = np.transpose(phy_data, axes=[0,2,1]).astype('float32')
-        # self.phy_data = phy_data
-
-        # test dataset normalization
-        assert aux_data.shape[0] == self.num_sample
-        self.aux_data = util.normalize(aux_data, self.train_aux_data_mean_sd)
-        #self.aux_data_names = aux_data_names
-        
-        # dataset index
-        self.idx_data = idx_data
-
-        # running against test sim?
-        if mode == 'sim':
-            # real vs. cat labels
-            label_num_idx = list()
-            label_cat_idx = list()
-            aux_idx = list()
-            for i,p in enumerate(label_names):
-                if p in self.label_num_names:
-                    label_num_idx.append(i)
-                if p in self.label_cat_names:
-                    label_cat_idx.append(i)
-            
-            assert labels.shape[0] == self.num_sample
-            
-            for i,p in enumerate(aux_data_names):
-                if p in self.aux_names:
-                    aux_idx.append(i)
-            self.aux_names = []
-            for i in aux_idx:
-                self.aux_names.append(aux_data_names[i])
-
-
-            self.true_labels_num = labels[:,label_num_idx]
-            self.true_labels_cat = labels[:,label_cat_idx]
-
-            self.true_aux = self.aux_data[:,aux_idx]
-            
-            # recode categorical labels
-            for idx in range(self.true_labels_cat.shape[1]):
-                unique_cats, encoded_cats = np.unique(self.true_labels_cat[:,idx],
-                                                      return_inverse=True)
-                self.true_labels_cat[:,idx] = encoded_cats                    
-                # num_outliers = np.sum(np.abs(self.aux_data[:, i]) > bound)
-                # if num_outliers > num_expected:
-                # util.print_warn(f'Outlier detected in column {i} of aux_data')
-            
-        # done
-        return
 
     def make_results(self, mode='sim'):
         """Makes all results for the Estimate step.
@@ -786,14 +530,21 @@ class Estimator:
 
         """
 
+     
         # filesystem
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
-        if mode == 'emp':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.test'
+            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
+            training_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
 
-        model_arch_fn = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
+        if mode == 'emp':
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.empirical'
+            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
+            training_prefix =  f'{self.trn_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
+
+
+        model_arch_fn = f'{training_prefix}.trained_model.pkl'
         out_est_labels_num_fn = f'{path_prefix}_est.labels_num.csv'
         out_true_labels_num_fn = f'{path_prefix}_true.labels_num.csv'
         out_est_labels_cat_fn = f'{path_prefix}_est.labels_cat.csv'
@@ -801,104 +552,118 @@ class Estimator:
         out_true_aux_fn = f'{path_prefix}_true.aux.csv'
         out_aux_names_fn = f'{path_prefix}_aux_names.csv'
 
+        # simulated test datasets for csv or hdf5
+        hdf5_fn = f'{short_path_prefix}.hdf5'
+        train_labels_num_norm_fn    = f'{training_prefix}.trn_norm.labels_num.csv'
+        train_aux_data_norm_fn       = f'{training_prefix}.trn_norm.aux_data.csv'
+        train_attr_data_norm_fn       = f'{training_prefix}.trn_norm.attr_data.csv'
+
+        aux_norms = pd.read_csv(train_aux_data_norm_fn,sep=',')
+        attr_norms = pd.read_csv(train_attr_data_norm_fn,sep=',')
+
+        self.aux_msd = (torch.from_numpy(aux_norms.iloc[:, 0].to_numpy()),torch.from_numpy(aux_norms.iloc[:, 1].to_numpy()))
+        self.attr_msd = (torch.from_numpy(attr_norms.iloc[:, 0].to_numpy()),torch.from_numpy(attr_norms.iloc[:, 1].to_numpy()))
 
     
+        print("LOADING", model_arch_fn)
         # load model
         self.mymodel = torch.load(model_arch_fn, map_location=self.TORCH_DEVICE, weights_only=False)
-        # if self.use_cuda:
-        #    self.mymodel = DataParallel((self.mymodel)) # model_arch_fn
         if self.use_cuda:
-            #self.model = torch.nn.DataParallel(self.model)
             self.mymodel = DataParallel(self.mymodel)
-            # self.model = DDP(self.model)
         self.mymodel.to(self.TORCH_DEVICE)
 
+        with h5py.File(hdf5_fn, "r") as f:
+            N = f["phy_data"].shape[0]
+            self.label_names = [s.decode() for s in f['label_names'][0,:] ]
+            aux_data_names = [ s.decode() for s in f['aux_data_names'][0,:] ]
+
+            blocks = [np.arange(N)[i:i+self.block_size] for i in range(0,N,self.block_size)]
+            self.trainer = train.CnnTrainer(self.args)
+            self.estimate_dataset = train.HDF5BlockDataset(hdf5_fn, blocks, self.trainer)
+
         # get estimates
-        loader = DataLoader(self.estimate_dataset, batch_size = self.num_sample, collate_fn = custom_collate)
-        n_batches = len(loader)
-        for j, (loaded_graph, loaded_idx, loaded_lbl_num, loaded_lbl_cat) in tqdm(enumerate(loader), total=n_batches):
-            print("LOADED GRAPH")
-            print(loaded_graph)
-            # loaded_graph = loaded_graph.to(self.TORCH_DEVICE)
-            # loaded_batch = loaded_batch.to("cuda")
-            label_est = self.mymodel(loaded_graph)#.to(torch.device("cuda"))
+        self.total_batches = len(self.estimate_dataset)*(math.ceil(self.block_size / self.trn_batch_size))
+        pbar = tqdm(total=self.total_batches)
+
+        print("Trainer type:", type(self.trainer))
+        print("Method being used:", self.trainer.separate_labels)
+
         
+        all_idx = []
+        print("out for estimated nums:, ", out_est_labels_num_fn)
+        print("out for estimated cats:, ", out_est_labels_cat_fn)
+        print("mode:", mode)
 
-        # real vs. cat estimates
-        labels_est_num = label_est[0:3]
-        labels_est_cat = label_est[3]
-        amax = labels_est_cat.argmax(dim=1)
+        for j in range(len(self.estimate_dataset)):
+            graph_list = self.estimate_dataset[j]
+            loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
+            # print("mean, sd:", self.train_labels_num_mean_sd)
+            first_batch = True
+            for batch in loader:
+                lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                lbl_num = torch.stack([g.lbl_num for g in batch], dim=0).to(self.TORCH_DEVICE)
+                batch_idx = np.array([g.idx for g in batch])
+                all_idx.append(batch_idx)
+                aux_dat = torch.stack([g.aux_dat for g in batch], dim=0).to(self.TORCH_DEVICE)
+                for g in batch:
+                    old = g.x
+                    g.x = util.normalize(g.x, self.attr_msd).clone().detach().float()
+                    g.aux_dat = util.normalize(g.aux_dat, self.aux_msd).float().clone().detach().float()
+                try:
+                    label_est = self.mymodel(batch)
+                    pbar.update(1)
+                except Exception as e:
+                    print("exception in lbls_est", e)
+                    raise
 
-        # # force categorical dimensionality (had problems for categ)
-        # for k,v in labels_est_cat.items():
-        #     labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
-        #                                       shape=(self.graph_data.shape[0],-1))
+                # real vs. cat estimates
+                labels_est_num = label_est[3]
+                # print("labels_est_num", labels_est_num)
+                # print("labels_est_num:", labels_est_num)
+                # amax = labels_est_cat.argmax(dim=1)
 
-        # point estimates & CPIs for test labels
-        if self.has_label_num:
-            
-            # move Tensor from device to numpy
-            labels_est_num = torch.stack(labels_est_num).cpu().detach().numpy()
-            
-            if labels_est_num.ndim == 2:
-                labels_est_num.shape = (labels_est_num.shape[0], 1, labels_est_num.shape[1])
-            labels_est_num[1,:,:] = labels_est_num[1,:,:] + self.cpi_adjustments[0,:]
-            labels_est_num[2,:,:] = labels_est_num[2,:,:] + self.cpi_adjustments[1,:]
-            
-            # denormalize test label estimates
-            denorm_est_labels_num = util.denormalize(labels_est_num,
-                                                      self.train_labels_num_mean_sd,
-                                                      exp=False)
+                # # force categorical dimensionality (had problems for categ)
+                # for k,v in labels_est_cat.items():
+                #     labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
+                #                                       shape=(self.graph_data.shape[0],-1))
 
-            # save label real estimates
-            df_est_labels_num = util.make_param_VLU_mtx(denorm_est_labels_num,
-                                                         self.label_num_names)
-            df_est_labels_num = pd.concat( [self.idx_data, df_est_labels_num], axis=1 )
-            pd.DataFrame(df_est_labels_num).to_csv(out_est_labels_num_fn, index=False, sep=',',
-                                      float_format=util.PANDAS_FLOAT_FMT_STR)
+                csv_mode = "a"
+                header = False
+                if j == 0 and first_batch:
+                    csv_mode = "w"
+                    first_batch = False
+                    # header = True
+                # save label cat estimates
+                # print("estimates", labels_est_num)
+                df_est_labels_cat = pd.DataFrame((labels_est_num.cpu().detach().argmax(dim=1).flatten()))
+                #self.format_label_cat(labels_est_cat)
+                df_est_labels_cat = pd.concat( [pd.DataFrame(batch_idx), df_est_labels_cat], axis=1 )
+                # print("writing estimates")
+                df_est_labels_cat.to_csv(out_est_labels_cat_fn, index=False, sep=',',
+                                        float_format=util.PANDAS_FLOAT_FMT_STR, header=header, mode=csv_mode)
 
 
-        self.idx_data = pd.DataFrame(self.idx_data)                              
-        
-        # save label cat estimates
-        if self.has_label_cat:
-            df_est_labels_cat = pd.DataFrame((labels_est_cat.cpu().detach().argmax(dim=1).flatten()))
-            #self.format_label_cat(labels_est_cat)
-            df_est_labels_cat = pd.concat( [self.idx_data, df_est_labels_cat], axis=1 )
-            df_est_labels_cat.to_csv(out_est_labels_cat_fn, index=False, sep=',',
-                                     float_format=util.PANDAS_FLOAT_FMT_STR)
-
-            
-            # for k,v in labels_est_cat.items():
-            #     labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()
-        
-        if mode == 'sim':
-            if self.has_label_num:
-                df_true_labels_num = pd.DataFrame(self.true_labels_num, columns=self.label_num_names)
-                df_true_labels_num = pd.concat( [self.idx_data, df_true_labels_num], axis=1 )
-                df_true_labels_num.to_csv(out_true_labels_num_fn, index=False, sep=',', float_format=util.PANDAS_FLOAT_FMT_STR)
-            
-            if self.has_label_cat:
-                df_true_labels_cat = pd.DataFrame(self.true_labels_cat, columns=self.label_cat_names, dtype='int')
-                df_true_labels_cat = pd.concat( [self.idx_data, df_true_labels_cat], axis=1)
-                df_true_labels_cat.to_csv(out_true_labels_cat_fn, index=False, sep=',')
-            if self.has_aux:
-                df_true_aux = pd.DataFrame(self.true_aux, dtype='float')
-                df_true_aux = pd.concat( [self.idx_data, df_true_aux], axis=1)
+                    
+                    # for k,v in labels_est_cat.items():
+                    #     labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()
                 
-                df_true_aux.columns = ["idx"] + self.aux_names
-                df_true_aux.to_csv(out_true_aux_fn, index=False, sep=',')
-        
-        if mode == 'emp':
-            # self.est_labels_num_raw = denorm_est_labels_num
-            self.est_true_aux_raw = util.denormalize(self.aux_data,
-                                                     self.train_aux_data_mean_sd,
-                                                     exp=False)
-            if self.has_label_num:
-                self.est_labels_num_raw = util.denormalize(labels_est_num,
-                                                          self.train_labels_num_mean_sd,
-                                                          exp=False)[0,:,:]
-        
+                if mode == 'sim':
+                    df_true_labels_cat = pd.DataFrame(lbl_cat.cpu().detach(), columns=self.label_cat_names, dtype='int')
+                    df_true_labels_cat = pd.concat( [pd.DataFrame(batch_idx), df_true_labels_cat], axis=1)
+                    df_true_labels_cat.to_csv(out_true_labels_cat_fn, header=header, index=False, sep=',', mode=csv_mode)
+                if self.has_aux:
+                        df_true_aux = pd.DataFrame(aux_dat.cpu().detach().squeeze(1), dtype='float')
+                        df_true_aux = pd.concat( [pd.DataFrame(batch_idx), df_true_aux], axis=1)
+                        
+                        # df_true_aux.columns = ["idx"] + self.aux_names
+                        df_true_aux.to_csv(out_true_aux_fn, index=False, sep=',', header=header, mode=csv_mode)
+                
+                if mode == 'emp':
+                    # self.est_labels_num_raw = denorm_est_labels_num
+                    self.est_true_aux_raw = aux_dat #util.denormalize(aux_dat,
+                                                #         self.train_aux_data_mean_sd,
+                                                #         exp=False)
+                   
         # done
         return
     
@@ -940,26 +705,3 @@ class Estimator:
                 util.print_str(f'         - Detected outlier(s):')
                 for j in range(outliers.shape[0]):
                     util.print_str(f'             index {outlier_idx[j]} : value {outliers[j]}')
-        
-        # check for outliers in labels
-        if self.has_label_num:
-            est_labels_num = util.normalize(self.est_labels_num_raw, self.train_labels_num_mean_sd)
-            lbl_std_bound = np.round(sp.stats.norm.ppf(1.0 - self.warn_lbl_outlier/2, loc=0, scale=1), 2)
-            for i in range(est_labels_num.shape[1]):
-                outlier_fail = np.abs(est_labels_num[:, i]) > lbl_std_bound
-                mu = self.train_labels_num_mean_sd[0][i]
-                sd = self.train_labels_num_mean_sd[1][i]
-                raw_lower = "{:.2e}".format(mu - lbl_std_bound * sd)
-                raw_upper = "{:.2e}".format(mu + lbl_std_bound * sd)
-                percent = 100*(1.0 - self.warn_lbl_outlier)
-                outlier_idx = np.where(outlier_fail)[0]
-                outliers = self.est_labels_num_raw[outlier_fail, i]
-                if outliers.shape[0] > 0:
-                    util.print_warn(f'Outlier(s) detected in empirical labels: {self.label_num_names[i]}')
-                    # util.print_str(f'           Values outside {(1.0 - self.warn_lbl_outlier*100)}% interval of [{raw_lower}, {raw_upper}]')
-                    util.print_str(f'         - Values outside ± {lbl_std_bound}sd ({percent}%) interval of [{raw_lower}, {raw_upper}]')
-                    util.print_str(f'         - Detected outlier(s):')
-                    for j in range(outliers.shape[0]):
-                        util.print_str(f'             index {outlier_idx[j]} : value {outliers[j]}')
-        
-##################################################

@@ -98,7 +98,7 @@ class Plotter:
         
         self.phylo_pool         =bool(args['phylo_pool'])
         self.graph_conv         =bool(args['graph_conv'])
-        self.phy_hidden_size = int(args['phy_hidden_size'])
+        self.hidden_size = int(args['phy_hidden_size'])
         self.optimizer          = str(args['optimizer'])
 
         self.learning_rate      = float(args['learning_rate'])
@@ -116,12 +116,18 @@ class Plotter:
         self.plot_val_color = str(args['plot_val_color'])
         self.plot_emp_color = str(args['plot_emp_color'])
         self.log_offset = float(args['log_offset'])
-        self.cpi_coverage = float(args['cpi_coverage'])
+        # self.cpi_coverage = float(args['cpi_coverage'])
         self.plot_num_scatter = int(args['plot_num_scatter'])
         self.plot_min_emp = int(args['plot_min_emp'])
         self.plot_num_emp = int(args['plot_num_emp'])
         self.plot_pca_noise = float(args['plot_pca_noise'])
         self.num_classes = int(args['num_classes'])
+
+        self.dropout = float(args['dropout'])
+        self.dataset_size = int(args['dataset_size'])
+        self.batch_size = int(args['accumulation_steps']) *  int(args['trn_batch_size'])
+        self.activation_func    = str(args['activation_func'])
+
 
         self.scheduler="manual"#CosineAnnealingLR
 
@@ -153,16 +159,16 @@ class Plotter:
         self.train_labels_fn = f'{fmt_proj_prefix}.train.labels.csv'
 
         # train dataset tensors
-        self.train_est_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_num.csv'
-        self.train_true_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_num.csv'
-        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_est.labels_cat.csv'
-        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_true.labels_cat.csv'
+        self.train_est_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_est.labels_num.csv'
+        self.train_true_num_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_true.labels_num.csv'
+        self.train_est_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_est.labels_cat.csv'
+        self.train_true_cat_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_true.labels_cat.csv'
 
         # test dataset tensors
         if self.est_prefix == "":
-            path_prefix = f'{est_proj_prefix}/{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
+            path_prefix = f'{est_proj_prefix}/{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.test'
         else:
-            path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test'
+            path_prefix = f'{est_proj_prefix}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.test'
 
         self.test_est_num_fn = f'{path_prefix}_est.labels_num.csv'
         self.test_true_num_fn = f'{path_prefix}_true.labels_num.csv'
@@ -181,36 +187,36 @@ class Plotter:
         self.emp_est_cat_fn = f'{est_proj_prefix}.empirical_est.labels_cat.csv'
 
         # network
-        self.model_arch_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.trained_model.pkl'
-        self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history.csv'
-
+        self.model_arch_fn = f'{trn_proj_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.trained_model.pkl'
+        self.history_fn = f'{trn_proj_prefix}.{self.optimizer}.{self.dataset_size}.{self.batch_size}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history.csv'
+        print("history_fn", self.history_fn)
         # new empirical plot
         self.save_cpi_est_fn = f'{plt_proj_prefix}.empirical_estimate'
 
         # PCA plotting output
-        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_phy_data.pdf'
-        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_aux_data.pdf'
-        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_pca_labels_num.pdf'
+        self.save_train_pca_phy_data_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_pca_phy_data.pdf'
+        self.save_train_pca_aux_data_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_pca_aux_data.pdf'
+        self.save_train_pca_labels_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_pca_labels_num.pdf'
         # self.save_emp_pca_aux_data_fn    = f'{plt_proj_prefix}.empirical_pca_contour_aux_data.pdf'
         # self.save_emp_pca_labels_fn      = f'{plt_proj_prefix}.empirical_pca_contour_labels_num.pdf'
 
         # density plotting output
-        self.save_train_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_density_aux_data.pdf'
-        self.save_train_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_density_labels_num.pdf'
-        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical_density_aux_data.pdf'
-        self.save_emp_density_label_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.empirical_density_labels_num.pdf'
+        self.save_train_density_aux_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_density_aux_data.pdf'
+        self.save_train_density_label_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_density_labels_num.pdf'
+        self.save_emp_density_aux_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.empirical_density_aux_data.pdf'
+        self.save_emp_density_label_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.empirical_density_labels_num.pdf'
 
         # scatter plotting output
-        self.save_train_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_estimate'
-        self.save_test_est_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.test_estimate'
+        self.save_train_est_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_estimate'
+        self.save_test_est_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.test_estimate'
 
         # network plotting output
-        self.save_network_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.network_architecture.pdf'
-        self.save_history_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.train_history'
+        self.save_network_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.network_architecture.pdf'
+        self.save_history_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.train_history'
 
         # summary plotting output
-        self.save_summary_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.summary.pdf'
-        self.save_report_fn = f'{plt_proj_prefix}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.regularisation}.summary.csv'
+        self.save_summary_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.summary.pdf'
+        self.save_report_fn = f'{plt_proj_prefix}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.summary.csv'
 
         # cat vs. real parameter names
         self.param_name_num = [k for k, v in self.param_est.items() if
@@ -384,34 +390,33 @@ class Plotter:
         self.train_true_cat = util.read_csv_as_pandas(self.train_true_cat_fn)
 
         # test true/estimated labels
-        self.test_est_num = util.read_csv_as_pandas(self.test_est_num_fn)
-        self.test_true_num = util.read_csv_as_pandas(self.test_true_num_fn)
+        self.test_est_num = util.read_csv_as_pandas(self.test_est_num_fn, header=None)
+        self.test_true_num = util.read_csv_as_pandas(self.test_true_num_fn, header=None)
         print(self.test_true_num_fn)
-        self.test_est_cat = util.read_csv_as_pandas(self.test_est_cat_fn)
-        self.test_true_cat = util.read_csv_as_pandas(self.test_true_cat_fn)
-        self.test_true_aux = util.read_csv_as_pandas(self.test_aux_fn)
+        self.test_est_cat = util.read_csv_as_pandas(self.test_est_cat_fn, header=None)
+        self.test_true_cat = util.read_csv_as_pandas(self.test_true_cat_fn, header=None)
+        self.test_true_aux = util.read_csv_as_pandas(self.test_aux_fn, header=None)
         self.test_true_prop = util.read_csv_as_pandas(self.test_props_fn)
         hdf5_file = h5py.File(self.test_hdf5_fn, 'r')
         self.test_lbl_data_names = [s.decode() for s in
                                         hdf5_file['label_names'][0, :]]
         self.test_label_as_aux = pd.DataFrame(hdf5_file['labels'][:, :],
                                                    columns=self.test_lbl_data_names).iloc[:,1:]
+        print(self.test_true_cat_fn)
+        print(self.test_est_cat_fn)
         print("initial test true aux")
         print(self.test_true_aux)
         print("labels as aux")
         print(self.test_label_as_aux)
         self.test_true_aux = pd.concat([self.test_true_aux, self.test_label_as_aux, self.test_true_prop], axis =1)
-        print("combined")
-        print(self.test_true_aux)
+        # print("combined")
+        # print(self.test_true_aux)
 
         # empirical estimated labels
 
 
         self.emp_est_num = util.read_csv_as_pandas(self.emp_est_num_fn)
         self.emp_est_cat = util.read_csv_as_pandas(self.emp_est_cat_fn)
-
-
-
         self.test_true_cat.columns = ['idx', 'model_type']
         self.test_est_cat.columns = ['idx', 'model_type']
 
@@ -419,31 +424,31 @@ class Plotter:
         # check what datasets we have
         if self.test_est_num is not None and self.test_true_num is not None:
             self.has_test_num = True
-            self.test_est_num = self.test_est_num.drop(columns=['idx'])
-            self.test_true_num = self.test_true_num.drop(columns=['idx'])
+            self.test_est_num = self.test_est_num.iloc[:, 1:]#.drop(columns=['idx'])
+            self.test_true_num = self.test_true_num.iloc[:, 1:]#.drop(columns=['idx'])
         if self.test_est_cat is not None and self.test_true_cat is not None:
             self.has_test_cat = True
-            self.test_est_cat = self.test_est_cat.drop(columns=['idx'])
-            self.test_true_cat = self.test_true_cat.drop(columns=['idx'])
+            self.test_est_cat = self.test_est_cat.iloc[:, 1:]#.drop(columns=['idx'])
+            self.test_true_cat = self.test_true_cat.iloc[:, 1:]#.drop(columns=['idx'])
         if self.test_true_aux is not None:
             self.has_true_aux = True
-            self.test_true_aux = self.test_true_aux.drop(self.test_true_aux.columns[0], axis=1)
+            self.test_true_aux = self.test_true_aux.iloc[:, 1:]# , axis=1) #drop(self.test_true_aux.columns[0]
 
 
         if self.train_est_num is not None and self.train_true_num is not None:
             self.has_train_num = True
-            self.train_est_num = self.train_est_num.drop(columns=['idx'])
-            self.train_true_num = self.train_true_num.drop(columns=['idx'])
+            self.train_est_num = self.train_est_num.iloc[:, 1:]#.drop(columns=['idx'])
+            self.train_true_num = self.train_true_num.iloc[:, 1:]#.drop(columns=['idx'])
         if self.train_est_cat is not None and self.train_true_cat is not None:
             self.has_train_cat = True
-            self.train_est_cat = self.train_est_cat.drop(columns=['idx'])
-            self.train_true_cat = self.train_true_cat.drop(columns=['idx'])
+            self.train_est_cat = self.train_est_cat.iloc[:, 1:]#.drop(columns=['idx'])
+            self.train_true_cat = self.train_true_cat.iloc[:, 1:]#.drop(columns=['idx'])
         if self.emp_est_num is not None:
             self.has_emp_num = True
-            self.emp_est_num = self.emp_est_num.drop(columns=['idx'])
+            self.emp_est_num = self.emp_est_num.iloc[:, 1:]#.drop(columns=['idx'])
         if self.emp_est_cat is not None:
             self.has_emp_cat = True
-            self.emp_est_cat = self.emp_est_cat.drop(columns=['idx'])
+            self.emp_est_cat = self.emp_est_cat.iloc[:, 1:]#.drop(columns=['idx'])
 
         if self.has_train_fmt:
             # split training labels from format into real/cat
@@ -453,8 +458,17 @@ class Plotter:
             # aux data column names
             self.aux_data_names = self.train_aux_data.columns.to_list()
 
+        print("has train cat", self.has_train_cat)
+        print("has train num", self.has_train_num)
+        print("has test cat", self.has_test_cat)
+        print("has test num", self.has_test_num)
+        print("has emp cat", self.has_emp_cat)
+        print("has emp num", self.has_emp_num)
+
         # training history for network
-        self.history_table = util.read_csv_as_pandas(self.history_fn)
+        self.history_table = util.read_csv_as_pandas(self.history_fn, header = 0)
+        print("history table")
+        print(self.history_table)
 
         # load empirical aux. data, if they exist
         self.emp_aux_data = None
@@ -478,7 +492,7 @@ class Plotter:
 
 
         if self.load_MLE:
-            path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}'
+            path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
             out_est_LRT_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
             self.LRT_labels = pd.read_csv(out_est_LRT_labels_cat_fn, sep=',', index_col=False).to_numpy()
             print("LRT labels:")
@@ -1598,6 +1612,8 @@ class Plotter:
         plt.figure(figsize=(fig_width, fig_height))
 
         max_num = np.min([self.plot_num_scatter, ests.shape[0]])
+        print("ests:", ests)
+        print("labels:", labels)
 
         # plot parameters
         for i, p in enumerate(labels.columns):
@@ -1612,9 +1628,11 @@ class Plotter:
             if len(zero_true_idx) > 0:
                 tiny_val = np.max(lbl_true - np.min(lbl_true)) * 1E-6
                 lbl_true[zero_true_idx] = tiny_val
-            lbl_est = ests[f'{p}_value'][:].to_numpy()
-            lbl_lower = ests[f'{p}_lower'][:].to_numpy()
-            lbl_upper = ests[f'{p}_upper'][:].to_numpy()
+            # lbl_est = ests[f'{p}_value'][:].to_numpy()
+            # lbl_lower = ests[f'{p}_lower'][:].to_numpy()
+            # lbl_upper = ests[f'{p}_upper'][:].to_numpy()
+            lbl_est = ests[p][:].to_numpy()
+
             lbl_true = labels[p][:].to_numpy()
 
             # accuracy stats
@@ -1625,11 +1643,11 @@ class Plotter:
             stat_rmse = np.sqrt(stat_mse)
             
             # coverage stats
-            stat_cover = np.logical_and(lbl_lower < lbl_true,
-                                        lbl_upper > lbl_true)
-            stat_not_cover = np.logical_not(stat_cover)
-            f_stat_cover = sum(stat_cover) / len(stat_cover) * 100
-            f_stat_cover_target = self.cpi_coverage * 100
+            # stat_cover = np.logical_and(lbl_lower < lbl_true,
+            #                             lbl_upper > lbl_true)
+            # stat_not_cover = np.logical_not(stat_cover)
+            # f_stat_cover = sum(stat_cover) / len(stat_cover) * 100
+            # f_stat_cover_target = self.cpi_coverage * 100
 
             # linear regression slope
             # if only_positive:
@@ -1649,42 +1667,42 @@ class Plotter:
             # s_mape = '{:.1f}%'.format(stat_mape)
             s_slope = '{:.2E}'.format(stat_slope)
             s_intercept = '{:.2E}'.format(stat_intercept)
-            s_cover = '{:.1f}%'.format(f_stat_cover)
-            s_cover_target = '{:.1f}%'.format(f_stat_cover_target)
+            # s_cover = '{:.1f}%'.format(f_stat_cover)
+            # s_cover_target = '{:.1f}%'.format(f_stat_cover_target)
 
             bad_slope_str = '<' if stat_slope < 1.0 else '>'
-            bad_cover_str = '<' if f_stat_cover < f_stat_cover_target else '>'
+            # bad_cover_str = '<' if f_stat_cover < f_stat_cover_target else '>'
             
             if stat_slope < 0.0 or np.abs(np.log(stat_slope + 1e-12)) > 0.1:
                 util.print_warn(f'{title} estimate accuracy for {p} is low   [slope {round(stat_slope, 2)} {bad_slope_str} 1.00]')
-            if f_stat_cover/f_stat_cover_target < 0.0 or np.abs(np.log(f_stat_cover/f_stat_cover_target)) > 0.1:
-                util.print_warn(f'{title} estimate coverage for {p} is bad   [coverage {s_cover} {bad_cover_str} {s_cover_target}]')
+            # if f_stat_cover/f_stat_cover_target < 0.0 or np.abs(np.log(f_stat_cover/f_stat_cover_target)) > 0.1:
+            #     util.print_warn(f'{title} estimate coverage for {p} is bad   [coverage {s_cover} {bad_cover_str} {s_cover_target}]')
 
             # covered points
             alpha = 0.5
             # downsample
             lbl_true = lbl_true[0:max_num]
             lbl_est = lbl_est[0:max_num]
-            lbl_lower = lbl_lower[0:max_num]
-            lbl_upper = lbl_upper[0:max_num]
-            stat_cover = stat_cover[0:max_num]
-            stat_not_cover = stat_not_cover[0:max_num]
-            plt.scatter(lbl_true[stat_cover], lbl_est[stat_cover],
-                        alpha=alpha, c=color, zorder=3, s=3)
+            # lbl_lower = lbl_lower[0:max_num]
+            # lbl_upper = lbl_upper[0:max_num]
+            # stat_cover = stat_cover[0:max_num]
+            # stat_not_cover = stat_not_cover[0:max_num]
+            # plt.scatter(lbl_true[stat_cover], lbl_est[stat_cover],
+            #             alpha=alpha, c=color, zorder=3, s=3)
             # covered bars
-            plt.plot([lbl_true[stat_cover], lbl_true[stat_cover]],
-                     [lbl_lower[stat_cover], lbl_upper[stat_cover]],
-                     color=color, alpha=alpha, linestyle="-", marker='_',
-                     linewidth=0.5, zorder=2)
+            # plt.plot([lbl_true[stat_cover], lbl_true[stat_cover]],
+            #          [lbl_lower[stat_cover], lbl_upper[stat_cover]],
+            #          color=color, alpha=alpha, linestyle="-", marker='_',
+            #          linewidth=0.5, zorder=2)
 
             # not covered points
-            plt.scatter(lbl_true[stat_not_cover], lbl_est[stat_not_cover],
-                        alpha=alpha, c='#aaaaaa', zorder=5, s=3)
+            # plt.scatter(lbl_true[stat_not_cover], lbl_est[stat_not_cover],
+            #             alpha=alpha, c='#aaaaaa', zorder=5, s=3)
             # not covered bars
-            plt.plot([lbl_true[stat_not_cover], lbl_true[stat_not_cover]],
-                     [lbl_lower[stat_not_cover], lbl_upper[stat_not_cover]],
-                     color='#aaaaaa', alpha=alpha, linestyle="-", marker='_',
-                     linewidth=0.5, zorder=4)
+            # plt.plot([lbl_true[stat_not_cover], lbl_true[stat_not_cover]],
+            #          [lbl_lower[stat_not_cover], lbl_upper[stat_not_cover]],
+            #          color='#aaaaaa', alpha=alpha, linestyle="-", marker='_',
+            #          linewidth=0.5, zorder=4)
 
             # regression line
             # plt.axline((0, stat_intercept), slope=(stat_slope, 0), color=color,
@@ -1699,10 +1717,10 @@ class Plotter:
             # set axes
             xlim = plt.xlim()
             ylim = plt.ylim()
-            minlim = min(
-                [min(lbl_lower), min(lbl_true)])  # min(xlim[0], ylim[0])
-            maxlim = max(
-                [max(lbl_upper), max(lbl_true)])  # max(xlim[1], ylim[1])
+            minlim = min(lbl_true) #min(
+                #[min(lbl_lower), min(lbl_true)])  # min(xlim[0], ylim[0])
+            maxlim = max(lbl_true) #max(
+                #[max(lbl_upper), max(lbl_true)])  # max(xlim[1], ylim[1])
             dxy = (maxlim - minlim) * 0.05
             plt.xlim([minlim - dxy, maxlim + dxy])
             plt.ylim([minlim - dxy, maxlim + dxy])
@@ -1711,8 +1729,8 @@ class Plotter:
             dx = 0.03
             stat_str = [f'MAE: {s_mae}', f'MSE: {s_mse}',
                         f'RMSE: {s_rmse}', f'Intercept: {s_intercept}',
-                        f'Slope: {s_slope}', f'Coverage: {s_cover}',
-                        f'Coverage target: {s_cover_target}']
+                        f'Slope: {s_slope}'] #, f'Coverage: {s_cover}',
+                        #f'Coverage target: {s_cover_target}']
 
             for j, s in enumerate(stat_str):
                 plt.annotate(s, xy=(0.01, 0.99 - j * dx),
@@ -1905,7 +1923,7 @@ class Plotter:
             val_color (str): Color for validation example metrics
 
         """
-
+        print("history:", history)
         # get data names/dimensions
         epochs = sorted(np.unique(history['epoch']))
         dataset_names = sorted(np.unique(history['dataset']))
@@ -2076,14 +2094,14 @@ class Plotter:
         for name, lbl, est in test_train_lbl:
             for col in lbl:
                 # get stats
-                mae = np.mean(np.abs(lbl[col] - est[col + '_value']))
-                mse = np.mean((lbl[col] - est[col + '_value']) ** 2)
+                mae = np.mean(np.abs(lbl[col] - est[col ]))
+                mse = np.mean((lbl[col] - est[col]) ** 2)
                 mape = np.mean(
-                    np.abs((lbl[col] - est[col + '_value']) / lbl[col]))
-                cov = np.mean(np.logical_and(est[col + '_lower'] < lbl[col],
-                                             est[col + '_upper'] > lbl[col]))
-                ci_width = est[col + '_upper'] - est[col + '_lower']
-                rel_ci_width = np.divide(ci_width, est[col + '_value'])
+                    np.abs((lbl[col] - est[col]) / lbl[col]))
+                # cov = np.mean(np.logical_and(est[col + '_lower'] < lbl[col],
+                #                              est[col + '_upper'] > lbl[col]))
+                # ci_width = est[col + '_upper'] - est[col + '_lower']
+                # rel_ci_width = np.divide(ci_width, est[col + '_value'])
                 # store stats
                 df.loc[len(df)] = [name, 'true', 'label', 'mean', col, np.mean(lbl[col])]
                 df.loc[len(df)] = [name, 'true', 'label', 'var', col, np.var(lbl[col])]
@@ -2092,21 +2110,21 @@ class Plotter:
                 df.loc[len(df)] = [name, 'true', 'label', 'upper95', col,
                                    np.quantile(lbl[col], 0.975)]
                 df.loc[len(df)] = [name, 'est', 'label', 'mean', col,
-                                   np.mean(est[col + '_value'])]
+                                   np.mean(est[col])]
                 df.loc[len(df)] = [name, 'est', 'label', 'var', col,
-                                   np.var(est[col + '_value'])]
+                                   np.var(est[col])]
                 df.loc[len(df)] = [name, 'est', 'label', 'lower95', col,
-                                   np.quantile(est[col + '_value'], 0.025)]
+                                   np.quantile(est[col], 0.025)]
                 df.loc[len(df)] = [name, 'est', 'label', 'upper95', col,
-                                   np.quantile(est[col + '_value'], 0.975)]
+                                   np.quantile(est[col], 0.975)]
                 df.loc[len(df)] = [name, 'est', 'label', 'mae', col, mae]
                 df.loc[len(df)] = [name, 'est', 'label', 'mse', col, mse]
                 df.loc[len(df)] = [name, 'est', 'label', 'mape', col, mape]
-                df.loc[len(df)] = [name, 'est', 'label', 'coverage', col, cov]
-                df.loc[len(df)] = [name, 'est', 'label', 'mean_CI_width', col,
-                                   np.mean(ci_width)]
-                df.loc[len(df)] = [name, 'est', 'label', 'mean_rel_CI_width', col,
-                                   np.mean(rel_ci_width)]
+                # df.loc[len(df)] = [name, 'est', 'label', 'coverage', col, cov]
+                # df.loc[len(df)] = [name, 'est', 'label', 'mean_CI_width', col,
+                #                    np.mean(ci_width)]
+                # df.loc[len(df)] = [name, 'est', 'label', 'mean_rel_CI_width', col,
+                #                    np.mean(rel_ci_width)]
 
         # auxiliary data
         for name, aux in test_train_aux:
