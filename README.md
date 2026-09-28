@@ -2,11 +2,11 @@
 
 This repository contains code used to differentiate between phylogenies simulated under either a constant birth-death (BD) (Feller 1939), or binary state speciation and extinction (BiSSE) model (Maddison et al. 2007).  Code has been written by hand and using AI tools, such as ChatGPT and Claude, with human supervision.
 
-We use several different methods for our binary classification task, include graph neural networks. Code related to using graph neural networks is in the `src/phyddle` folder, while additional files for data simulation, result processing and other methods such as Akaike's Information Criterion are in the `workspace/pj_phyddle` folder.
+We use several different methods for our binary classification task, include graph neural networks. Code related to using graph neural networks is in the `src/phyddle` folder, while additional files for data simulation, result processing and other methods such as AIC (Akaike 1973) are in the `workspace/pj_phyddle` folder.
 
 
 ## Training graph neural networks
-To train graph neural networks, we edit source code from  (Thompson et al. 2024, Landis & Thompson 2026). To use our version, clone the [Phyddle repository](https://github.com/mlandis/phyddle), and replace the `src/phyddle` folder with the one available here.
+To train graph neural networks, we edit source code from  (Thompson et al. 2024, Landis & Thompson 2026). To use our version, clone the [Phyddle repository](https://github.com/mlandis/phyddle), and replace the `src/phyddle` folder with the one available here. We recommend familiarising yourself with the standard Phyddle pipeline before using this repository.
 
 In addition to adapting code for simulating and formatting data, plus training the network and making estimates, we also include a 
 
@@ -16,107 +16,20 @@ Our dataset consists of thirty thousand phylogenies, half of which are generated
 W
 
 # References
+> Akaike H. (1973). “Information Theory and an Extension of the Maximum Likelihood Principle”. In: Proc. 2nd Int. Symp. Inf. Theory. Ed. by B. N. Petrov, F. Csaki. Budapest:Akademiai Kiado, pp. 267–281. <br>
+
 > Feller W. (1939). “Die Grundlagen der Volterraschen Theorie des Kampfes ums Dasein in wahrscheinlichkeitstheoretischer Behandlung”. In: Acta Biotheor. 5.1, pp. 11–40. <br>
 
 > Maddison, W. P., Midford, P. E., & Otto, S. P. (2007). Estimating a binary character's effect on speciation and extinction. Systematic Biology, 56(5), 701-710. <br>
 
 >Mendes F. K., Landis M. J. (2024). “PhyloJunction: A computational framework for simulating, developing, and teaching evolutionary models”. In: Syst. Biol. 73.6, pp. 1051–1060. <br>
 
+>Neyman J., Pearson E. S. (Feb. 1933). “IX. On the problem of the most efficient tests of statistical hypotheses”. In: Philos. Trans. R. Soc. Lond. A 231.694-706, pp. 289–337. <br>
+
 > Landis, M.J., Thompson, A. 2025. phyddle: software for exploring phylogenetic models with deep learning. Systematic Biology (in press). doi:10.1093/sysbio/syaf036.<br>
 
 > Thompson, A., Liebeskind, B., Scully, E.J., Landis, M.J.. 2024. Deep learning and likelihood approaches for viral phylogeography converge on the same answers whether the inference model is right or wrong. Systematic Biology 73:183-206. 
-using Phyddle ()
+using Phyddle () <br>
 
-Software for exploring phylogenetic models with deep learning [manuscript](https://doi.org/10.1093/sysbio/syaf036)
+> Wilks S. S. (1938). “The large-sample distribution of the likelihood ratio for testing composite hypotheses”. In: Ann. Math. Stat. 9.1, pp. 60–62. <br>
 
-## User guide
-Visit https://phyddle.org to learn how to use the software.
-
-
-## Overview
-<img align="right" src="https://phyddle.org/_images/phyddle_pipeline.png" width="35%">
-
-A standard phyddle analysis performs the following tasks for you:
-
-- **Pipeline configuration** applies analysis settings provided through a config file and/or command line arguments.
-- **Simulate** simulates a large training dataset using a user-designed simulator.
-- **Format** encodes the raw simulated data (from *Simulate*) into tensor format for *Train*.
-- **Train** loads and splits training data (from *Format*), builds a network, then trains and saves the network.
-- **Estimate** estimates model parameters for a new dataset with the trained network (from *Train*).
-- **Plot** generates figures that summarize the training data (*Format*), the network and its training (*Train*), and any new predictions (*Estimate*).
-
-## Quick start
-
-To run a phyddle analysis enter the `scripts` directory:
-```shell
-cd ~/projects/phyddle
-```
-
-Then create and run a pipeline under the settings you've specified in `workspace/example/config.py`:
-```shell
-cd workspace/example
-phyddle --cfg config.py
-```
-
-This will run a phyddle analysis with 1000 simulations using R and the castor package for a simple birth-death model with one 3-state character. In practice, you'll want to generate a larger training dataset with anywhere from 10k to 1M examples, depending on the model.
-
-To add new examples to your training set
-```shell
-# simulate new training examples and store in simulate
-phyddle -s S -c config.py --sim_more 14000
-
-# encode all raw_data examples as tensors in format
-phyddle -s F -c config.py
-
-# train network with tensor data, but override batch size, then store in train
-phyddle -s T -c config.py --trn_batch_size 256
-
-# make prediction for empirical example in dataset
-phyddle -s E -c config.py
-
-# generate figures and store in plot
-phyddle -s P -c config.py
-```
-
-To see a full list of all options currently supported by phyddle
-```shell
-phyddle --help
-```
-
-## Installation
-
-A stable version of phyddle can be installed using the Python package manager, pip:
-
-```shell
-python3 -m pip install --upgrade phyddle
-# ... install ...
-phyddle
-```
-
-...or using conda:
-
-```shell
-conda create -n phyddle_env -c bioconda -c landismj phyddle
-# ... install ...
-conda activate phyddle_env
-phyddle
-```
-
-phyddle uses third-party simulators to generate training datasets. Example workflows assume that [R](https://cran.r-project.org), [RevBayes](https://revbayes.github.io), [Phylojunction](https://phylojunction.org/build/html/index.html), or [BEAST](https://www.beast2.org/) with [MASTER](https://github.com/tgvaughan/MASTER) (plugin) is installed on your machine and can be executed as a command from terminal. The documentation explains how to configure R for use with phyddle.
-
-## Need help?
-Visit the [Discussions](https://github.com/mlandis/phyddle/discussions) page to interact with other phyddle users and receive help.
-
-## Citation
-If you used phyddle, please cite:
-
-
-## Note on code stability
-
-Code on the [main](https://github.com/mlandis/phyddle/tree/main) branch is tested and stable with respect to the standard use cases. Code on the [development](https://github.com/mlandis/phyddle/tree/development) branch contains new features, but is not as rigorously tested. Most phyddle development occurs on a 16-core Intel Macbook Pro laptop and a 64-core Intel Ubuntu server. Any feedback is appreciated! [michael.landis@wustl.edu](mailto:michael.landis@wustl.edu)
-
-
-## About
-Thanks for your interest in phyddle. The phyddle project emerged from a phylogenetic deep learning study led by Ammon Thompson ([paper](https://doi.org/10.1093/sysbio/syad074)). The goal of phyddle is to provide its users with a generalizable pipeline workflow for phylogenetic modeling and deep learning. This hopefully will make it easier for phylogenetic model enthusiasts and developers to explore and apply models that do not have tractable likelihood functions. It's also intended for use by methods developers who want to characterize how deep learning methods perform under different conditions for standard phylogenetic estimation tasks. Read more about phyddle at https://doi.org/10.1093/sysbio/syaf036.
-
-The phyddle project is developed by [Michael Landis](https://landislab.org) and [Ammon Thompson](https://scholar.google.com/citatio:wqns?user=_EpmmTwAAAAJ&hl=en&oi=ao).
