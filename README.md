@@ -10,7 +10,7 @@ To train graph neural networks, we edit source code from  (Thompson et al. 2024,
 
 To convert phylogenies to graphs, we use helper functions from the [phylo-inference-ml repository](https://github.com/ismael-lajaaiti/phylo-inference-ml) (see Lajaaiti 2023).
 
-In addition to adapting code for simulating and formatting data, plus training the network and making estimates, we also include the `get_graph_embeddings.py` file in the source folder to extract graph embeddings by applying trained networks up to the final graph convolutional layer to input data.
+In addition to adapting code for simulating and formatting data, plus training the network and making estimates, we also include the `get_graph_embeddings.py` file in the source folder to extract graph embeddings by applying trained networks up to the final graph convolutional layer to input data. This can be run by setting the Phyddle step paramter to 'G', and should be run after the simulation, formatting, training and estimation steps.
 
 We primarily rely on our own plotting code to interpret analyses, rather than `plot.py` in the Phyddle source folder, but retain it for convenience of initial analyses.
 
@@ -32,15 +32,25 @@ After initial testing, we train six different networks. Our trained graph neural
 - A network trained using the **small** dataset using **average** pooling with **six** graph convolutional layers in total (four of which have the same input and output dimensions),  `out.2.2850.75.adam.manual.50.True.False.False.4.0.0005.0.01.relu.NA.trained_model.pkl`
 - A network trained using the **small** dataset using **average** pooling with **twelve** graph convolutional layers in total (ten of which have the same input and output dimensions),  `out.2.2850.75.adam.manual.50.True.False.True.10.0.0005.0.01.relu.NA.trained_model.pkl`
 - A network trained using the **small** dataset using **PhyloPool** with **three** graph convolutional layers in total,  `out.2.2850.150.adam.manual.8.True.True.False.3.0.0005.0.01.relu.NA.trained_model.pkl`
-- - A network trained using the **large** dataset using **average** pooling with **six** graph convolutional layers in total (four of which have the same input and output dimensions),  `out.2.28500.75.adam.manual.50.True.False.False.4.0.0005.0.01.relu.NA.trained_model.pkl`
+- A network trained using the **large** dataset using **average** pooling with **six** graph convolutional layers in total (four of which have the same input and output dimensions),  `out.2.28500.75.adam.manual.50.True.False.False.4.0.0005.0.01.relu.NA.trained_model.pkl`
 - A network trained using the **large** dataset using **average** pooling with **twelve** graph convolutional layers in total (ten of which have the same input and output dimensions),  `out.2.28500.75.adam.manual.50.True.False.True.10.0.0005.0.01.relu.NA.trained_model.pkl`
 - A network trained using the **large** dataset using **PhyloPool** with **three** graph convolutional layers in total, `out.2.28500.150.adam.manual.8.True.True.False.3.0.0005.0.01.relu.NA.trained_model.pkl`
 
 ## Estimation
-The estimation ('E') step is used to obtain predictions from the trained network.
+The estimation ('E') step is used to obtain predictions from the trained network. 
+
+## Graph embeddings
+To apply classifiers to graph embeddings, we extract the output from trained networks after the final graph convolutional layer. The folder `workspace/pj_phyddle/extract_graph_embeddings` contains three python scripts used to apply PCA, followed by either LDA, Random Forest or XGBClassifier to the dimensionality reduced features. We conduct grid or random searches for hyperparameters, and save the best performing model with between 1 and 50 principle components. We then apply the best model to our test dataset. The code to apply the best model can be found in the `apply_xgb_to_test.py` file.
+
+## Traditional classification methods
+Code to conduct AIC and LRT, and to apply LDA, Random Forest (Breiman 2001) or XGBClassifier (Chen et al. 2026) to summary statistics or our complete height-reordered vectors (CHV) is available in `workspace/pj_phyddle/traditional_methods`. Inference using AIC and LRT is conducted using the `AIC_and_LRT.R` script. Summary statistics for the large test and training datasets are available in `test_ids.csv` and `train_ids.csv` respectively. We use `extract_heigh_encodings.py` to obtain the CHV encodings. The CHV encodings on the small training and testing datasets are included as `chv_small_test.csv` and `chv_small_train.csv`. As the file containing all CHV encodings for the large dataset is large, we first break the file into 10 parts and zip each part, which are available in the `CHV_large_dataset` subfolder. To process these CHV encodings, the zipped csv files must be concatenated back together. Python files starting with "pca_and" process the CHV encodings for either the small or large dataset with either LDA, XGBClassifier or Random Forest. In the future, these scripts should be merged into one file.
 
 # References
 > Akaike H. (1973). “Information Theory and an Extension of the Maximum Likelihood Principle”. In: Proc. 2nd Int. Symp. Inf. Theory. Ed. by B. N. Petrov, F. Csaki. Budapest:Akademiai Kiado, pp. 267–281. <br>
+
+>Breiman L. (2001). “Random forests”. In: Machine learning 45.1, pp. 5–32. <br>
+
+>Chen T., He T., Benesty M., Khotilovich V., Tang Y., Cho H., Chen K., Mitchell R., Cano I., Zhou T., Li M., Xie J., Lin M., Geng Y., Li Y., Yuan J., Cortes D. (2026). xgboost: Extreme Gradient Boosting. R package version 3.4.1.1.
 
 > Feller W. (1939). “Die Grundlagen der Volterraschen Theorie des Kampfes ums Dasein in wahrscheinlichkeitstheoretischer Behandlung”. In: Acta Biotheor. 5.1, pp. 11–40. <br>
 
