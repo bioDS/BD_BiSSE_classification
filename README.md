@@ -26,6 +26,15 @@ We use the formatting step of our edited Phyddle code to convert simulated phylo
 
 ## Graph neural network training
 The training ('T') step of the Phyddle pipeline is used to train a graph neural network. Parameters such as the number of hidden layers and the number of graph convolutional layers can be specified in the config file. We can choose between two network architectures from Leroy et al. 2025 which use either average-pooling or the PhyloPool procedure.
+We use two different datasets, one with 30,000 phylogenies, which is our large dataset, and a subset of this with 3,000 phylogenies which is our small dataset. We use 85% of data for training, 15% for validation and 5% for testing.
+
+After initial testing, we train six different networks. Our trained graph neural networks are available in the `trained_model` folder:
+- A network trained using the **small** dataset using **average** pooling with **six** graph convolutional layers in total (four of which have the same input and output dimensions),  `out.2.2850.75.adam.manual.50.True.False.False.4.0.0005.0.01.relu.NA.trained_model.pkl`
+- A network trained using the **small** dataset using **average** pooling with **twelve** graph convolutional layers in total (ten of which have the same input and output dimensions),  `out.2.2850.75.adam.manual.50.True.False.True.10.0.0005.0.01.relu.NA.trained_model.pkl`
+- A network trained using the **small** dataset using **PhyloPool** with **three** graph convolutional layers in total,  `out.2.2850.150.adam.manual.8.True.True.False.3.0.0005.0.01.relu.NA.trained_model.pkl`
+- - A network trained using the **large** dataset using **average** pooling with **six** graph convolutional layers in total (four of which have the same input and output dimensions),  `out.2.28500.75.adam.manual.50.True.False.False.4.0.0005.0.01.relu.NA.trained_model.pkl`
+- A network trained using the **large** dataset using **average** pooling with **twelve** graph convolutional layers in total (ten of which have the same input and output dimensions),  `out.2.28500.75.adam.manual.50.True.False.True.10.0.0005.0.01.relu.NA.trained_model.pkl`
+- A network trained using the **large** dataset using **PhyloPool** with **three** graph convolutional layers in total, `out.2.28500.150.adam.manual.8.True.True.False.3.0.0005.0.01.relu.NA.trained_model.pkl`
 
 ## Estimation
 The estimation ('E') step is used to obtain predictions from the trained network.
