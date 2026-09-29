@@ -1,3 +1,6 @@
+# Use AIC and LRT to perform birth-death model classification.
+# Author: Kate Truman, with the use of AI tools.
+
 library("diversitree")
 library("ape")
 library(foreach)
@@ -7,7 +10,6 @@ library("ggplot2")
 library("dplyr")
 
 
-# https://eeob-macroevolution.github.io/Practicals/BiSSE_HiSSE/HiSSE_BiSSE_tutorial.html
 setwd("/home/ket581/AIphylo/phyddle/workspace/pj_phyddle/traditional_model_selection_thesis")
 file.remove("parallel_log_new_indices_changed_start.txt")
 
