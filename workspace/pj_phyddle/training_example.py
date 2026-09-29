@@ -13,7 +13,7 @@ args = {
     #-------------------------------#
     'step'               : 'T', #EP               # step(s) to run
     'verbose'              : 'T',                   # print verbose phyddle output?
-    'dir'                : '/mnt/DiversificationGraphInference/thirty_thousand_trees/', #'/mnt/DiversificationGraphInference/log_n_age',#'./similar_taxa_n_2_class/',  #similar_taxa_n_2_class                # base directory for step directories
+    'dir'                : '/mnt/DiversificationGraphInference/thirty_thousand_trees/',    # base directory for step directories
     'prefix'             : 'out',                 # base prefix for step output
     'output_precision'   : 12,                    # Number of digits (precision) for numbers in output files
 
@@ -30,7 +30,7 @@ args = {
     'sim_command'       : f'python3 sim_BD.py BD.pj trs', # exact command string, argument is output file prefix
     'sim_logging'       : 'verbose',        # verbose, compressed, or clean
     'start_idx'         : 1,                # first simulation replicate index
-    'end_idx'           : 10000, #100000            # last simulation replicate index
+    'end_idx'           : 10000,            # last simulation replicate index
     'sim_batch_size'    : 20,
 
     'num_classes': 2,
@@ -65,24 +65,24 @@ args = {
     #-------------------------------#
     # Train Step settings           #
     #-------------------------------#
-    'load_model'   : 'F', # F 
-    'phylo_pool' : 'F',
-    'graph_conv' : 'T',
-    'num_epochs'        : 100,  # 200             # number of training intervals (epochs)
-    'n_val_blocks'          : 3, # 0.05             # proportion of sims in validation dataset
-    'trn_batch_size'    : 16, #18           # number of samples in each training batch
+    'load_model'   : 'F', # whether to use already trained model 
+    'phylo_pool' : 'F', # if True, use GNN-PhyloPool architecture, else use GNN-AvgPool (architectures from Leroy et al. 2025)
+    'graph_conv' : 'T', # Which type of graph convolutional layer to use
+    'num_epochs'        : 100,               # number of training intervals (epochs)
+    'n_val_blocks'          : 3,              # number of blocks to use in validation dataset
+    'trn_batch_size'    : 16,            # number of samples in each training batch
     'loss_numerical'    : 'mse',            # loss function for learning
     'optimizer'         : 'adam',           # optimizer for network weight/bias parameters
     'activation_func'   :'relu',
-    'phy_hidden_size'   : 50,
-    'dropout' : 0.01,
-    'learning_rate'      :0.0005, # 0.006  # 0.0005 #.0001
-    'num_early_stop'    : 5,
-    'regularisation'    : 'NA', #L1L2
-    'regression': False,
-    'block_size': 1500,
-    'accumulation_steps': 4,
-    'dataset_size': 28500,
+    'phy_hidden_size'   : 50,            # parameter controlling number of neurons in hidden layers
+    'dropout' : 0.01,                    
+    'learning_rate'      :0.0005, 
+    'num_early_stop'    : 5,            # Number of epochs of consecutive validation loss increasing that we stop training for
+    'regularisation'    : 'NA',    # No, L1, L2 or both L1 and L2 regularisation
+    'regression': False,            # We are performing binary classification rather than regression - we could alter code to make this parameter unnecessary.
+    'block_size': 1500,            # Number of observations in each block
+    'accumulation_steps': 4,        # Number of batches before we update the optimizer, effective batch size is this parameter times trn_batch_size
+    'dataset_size': 28500,            # Number of observations in the training + validation dataset.
 
 
     #-------------------------------#
