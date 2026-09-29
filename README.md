@@ -2,7 +2,7 @@
 
 This repository contains code used to differentiate between phylogenies simulated under either a constant birth-death (BD) (Feller 1939), or binary state speciation and extinction (BiSSE) model (Maddison et al. 2007).  Code has been written by hand and using AI tools, such as ChatGPT and Claude, with human supervision.
 
-We use several different methods for our binary classification task, include graph neural networks. Code related to using graph neural networks is in the `src/phyddle` folder, while additional files for data simulation, result processing and other methods such as AIC (Akaike 1973) are in the `workspace/pj_phyddle` folder.
+We use several different methods for our binary classification task, include graph neural networks. Code related to creating and training graph neural networks is in the `src/phyddle` folder, while additional files for data simulation, result processing and other methods such as AIC (Akaike 1973) are in the `workspace/pj_phyddle` folder.
 
 
 ## Training graph neural networks
@@ -43,24 +43,24 @@ The estimation ('E') step is used to obtain predictions from the trained network
 To apply classifiers to graph embeddings, we extract the output from trained networks after the final graph convolutional layer. The folder `workspace/pj_phyddle/extract_graph_embeddings` contains three python scripts used to apply PCA, followed by either LDA, Random Forest or XGBClassifier to the dimensionality reduced features. We conduct grid or random searches for hyperparameters, and save the best performing model with between 1 and 50 principle components. We then apply the best model to our test dataset. The code to apply the best model can be found in the `apply_xgb_to_test.py` file.
 
 ## Traditional classification methods
-Code to conduct AIC and LRT, and to apply LDA, Random Forest (Breiman 2001) or XGBClassifier (Chen et al. 2026) to summary statistics or our complete height-reordered vectors (CHV) is available in `workspace/pj_phyddle/traditional_methods`. Inference using AIC and LRT is conducted using the `AIC_and_LRT.R` script. Summary statistics for the large test and training datasets are available in `test_ids.csv` and `train_ids.csv` respectively. We use `extract_heigh_encodings.py` to obtain the CHV encodings. The CHV encodings on the small training and testing datasets are included as `chv_small_test.csv` and `chv_small_train.csv`. As the file containing all CHV encodings for the large dataset is large, we first break the file into 10 parts and zip each part, which are available in the `CHV_large_dataset` subfolder. To process these CHV encodings, the zipped csv files must be concatenated back together. Python files starting with "pca_and" process the CHV encodings for either the small or large dataset with either LDA, XGBClassifier or Random Forest. In the future, these scripts should be merged into one file.
+Code to conduct AIC and LRT, and to apply LDA, Random Forest (Breiman 2001) or XGBClassifier (Chen et al. 2026) to summary statistics or our complete height-reordered vectors (CHV) is available in `workspace/pj_phyddle/traditional_methods`. Inference using AIC and LRT is conducted using the `AIC_and_LRT.R` script. Summary statistics for the large test and training datasets are available in `test_ids.csv` and `train_ids.csv` respectively. We use `extract_heigh_encodings.py` to obtain the CHV encodings. The CHV encodings on the small training and testing datasets are included as `chv_small_test.csv` and `chv_small_train.csv`. As the file containing all CHV encodings for the large dataset is large, we first break the file into 10 parts and zip each part, which are available in the `CHV_large_dataset` subfolder. To process these CHV encodings, the zipped csv files must be concatenated back together. Python files starting with "pca_and" process the CHV encodings for either the small or large dataset with either LDA, XGBClassifier or Random Forest. In the future, these scripts should be merged into one file. An example script to apply the best saved XGBClassifier model for the summary statistics and CHV encodings is provided as `find_classification_matrix.py`. Similar scripts are used to process results from using LDA or Random Forest.
 
 # References
 > Akaike H. (1973). “Information Theory and an Extension of the Maximum Likelihood Principle”. In: Proc. 2nd Int. Symp. Inf. Theory. Ed. by B. N. Petrov, F. Csaki. Budapest:Akademiai Kiado, pp. 267–281. <br>
 
->Breiman L. (2001). “Random forests”. In: Machine learning 45.1, pp. 5–32. <br>
+> Breiman L. (2001). “Random forests”. In: Machine learning 45.1, pp. 5–32. <br>
 
->Chen T., He T., Benesty M., Khotilovich V., Tang Y., Cho H., Chen K., Mitchell R., Cano I., Zhou T., Li M., Xie J., Lin M., Geng Y., Li Y., Yuan J., Cortes D. (2026). xgboost: Extreme Gradient Boosting. R package version 3.4.1.1.
+> Chen T., He T., Benesty M., Khotilovich V., Tang Y., Cho H., Chen K., Mitchell R., Cano I., Zhou T., Li M., Xie J., Lin M., Geng Y., Li Y., Yuan J., Cortes D. (2026). xgboost: Extreme Gradient Boosting. R package version 3.4.1.1.
 
 > Feller W. (1939). “Die Grundlagen der Volterraschen Theorie des Kampfes ums Dasein in wahrscheinlichkeitstheoretischer Behandlung”. In: Acta Biotheor. 5.1, pp. 11–40. <br>
 
 > Maddison, W. P., Midford, P. E., & Otto, S. P. (2007). Estimating a binary character's effect on speciation and extinction. Systematic Biology, 56(5), 701-710. <br>
 
->Mendes F. K., Landis M. J. (2024). “PhyloJunction: A computational framework for simulating, developing, and teaching evolutionary models”. In: Syst. Biol. 73.6, pp. 1051–1060. <br>
+> Mendes F. K., Landis M. J. (2024). “PhyloJunction: A computational framework for simulating, developing, and teaching evolutionary models”. In: Syst. Biol. 73.6, pp. 1051–1060. <br>
 
->Neyman J., Pearson E. S. (Feb. 1933). “IX. On the problem of the most efficient tests of statistical hypotheses”. In: Philos. Trans. R. Soc. Lond. A 231.694-706, pp. 289–337. <br>
+> Neyman J., Pearson E. S. (Feb. 1933). “IX. On the problem of the most efficient tests of statistical hypotheses”. In: Philos. Trans. R. Soc. Lond. A 231.694-706, pp. 289–337. <br>
 
->Lajaaiti I., Lambert S., Voznica J., Morlon H., Hartig F. (2023). "A Comparison of Deep
+> Lajaaiti I., Lambert S., Voznica J., Morlon H., Hartig F. (2023). "A Comparison of Deep
 Learning Architectures for Inferring Parameters of Diversification Models from Extant
 Phylogenies." <br>
 
