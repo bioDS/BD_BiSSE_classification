@@ -1,4 +1,11 @@
 #!/usr/bin/env python
+"""
+get_graph_embeddings
+======
+Extracts embeddings for inputted data by processing them on trained networks from the first layer until the final graph convolutional layer.
+
+Author:  Kate Truman, and AI tools (e.g. Claude and ChatGPT). Based on existing Phyddle code by Michael Landis and Ammon Thompson
+"""
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed

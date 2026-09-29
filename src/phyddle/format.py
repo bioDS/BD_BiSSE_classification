@@ -632,37 +632,15 @@ class Formatter:
         """
 
         assert data_str in ['test', 'train', 'empirical']
-        # mode = 'sim'
-        # if data_str == 'empirical':
-        #     mode = 'emp'
         
         # analysis info
         if data_str in ['test', 'train']:
             rep_idx               = self.split_idx[data_str]
         else:
             rep_idx = self.rep_idx
-        # rep_idx               = np.array([ idx for idx in rep_idx if idx in self.rep_data ])
-        # first_aux_data_values = list(self.rep_data.values())[0]['aux']
-        # first_par_est_values  = list(self.rep_data.values())[0]['lbl']
-        # aux_data_names        = first_aux_data_values.columns.to_list()
-        # par_est_names         = first_par_est_values.columns.to_list()
-        
-        # # dimensions
-        # num_samples           = len(rep_idx)
-        # tree_width            = self.tree_width
-        # num_data_length       = tree_width * self.num_data_col
-        # num_aux_data          = len(aux_data_names)
-        # num_par_est           = len(par_est_names)
-        
-        # # print info
-        # print(f'Making {data_str} hdf5 dataset: {num_samples} examples for tree width = {tree_width}')
 
         # # HDF5 file
         out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.new.hdf5' #remove new!
-        # print("attempting to open", out_hdf5_fn)
-
-        # aux_data_values = [(self.rep_data.values())[x]['aux']
-        # par_est_values  = [(self.rep_data.values())[x]['lbl']
 
         with h5py.File(out_hdf5_fn, 'a') as hdf5_file:
             res = list(self.rep_data.values())
@@ -680,24 +658,10 @@ class Formatter:
                     np.asarray(x['node_attr'], dtype=np.float64).reshape(-1, self.num_attr)
                     for x in res
                 ])
-                # print("cat:")
-                # print(node_attr_cat)
-                # print("total nodes:")
                 node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
                 node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
                 
-                # dat_node_1 = hdf5_file.create_dataset('node_1',
-                #                             (len(node_1_cat), ),
-                #                             dtype='f', compression='gzip', chunks=True)
-                # dat_node_2 = hdf5_file.create_dataset('node_2',
-                #                             (len(node_2_cat), ),
-                #                             dtype='f', compression='gzip', chunks=True)
-                # dat_node_attr = hdf5_file.create_dataset('node_attr', 
-                #         shape=(total_nodes,2),  dtype='f', compression='gzip', chunks=True)
-                # dat_graph_id = hdf5_file.create_dataset('graph_id', 
-                #     shape=(len(graph_cat),),  dtype='f', compression='gzip', chunks=True)
-
-                # https://stackoverflow.com/questions/47072859/how-to-append-data-to-one-specific-dataset-in-a-hdf5-file-with-h5py
+                # This code for appending data is based on https://stackoverflow.com/questions/47072859/how-to-append-data-to-one-specific-dataset-in-a-hdf5-file-with-h5py
                 new_dat = np.vstack( [ x['phy'] for x in res ] )
                 hdf5_file['phy_data'].resize((hdf5_file['phy_data'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['phy_data'][-new_dat.shape[0]:] = new_dat
@@ -742,21 +706,6 @@ class Formatter:
                 new_dat = np.array(range(len([x for x in res if x is not None])))
                 hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
                 hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat      
-
-
-                # self.dat_phy[:,:] = 
-                # self.dat_node_attr[:] = node_attr_cat.reshape(total_nodes,2, order='F')
-                # self.dat_node_1[:] = node_1_cat
-                # self.dat_node_2[:] = node_2_cat
-                # self.dat_graph_id[:] = graph_cat
-                # self.dat_aux[:,:] = np.vstack( [ x['aux'] for x in res ] )
-                # self.dat_num_edges[:] = np.vstack( [ x['num_edges'] for x in res ] )
-                # self.dat_num_nodes[:] = np.vstack( [ x['num_nodes'] for x in res ] )
-
-                # self.dat_lbl[:,:] = np.vstack( [ x['lbl'] for x in res ] )
-                
-
-
 
         return
     
@@ -1377,57 +1326,6 @@ class Formatter:
         cblvs = util.encode_cblvs(phy, dat, tree_width, tree_encode_type, rescale)
         return cblvs
     
-    # 
-    #     # data dimensions
-    #     num_tree_col = 0
-    #     num_char_col = dat.shape[0]
-    #     if tree_encode_type == 'height_only':
-    #         num_tree_col = 2
-    #     elif tree_encode_type == 'height_brlen':
-    #         num_tree_col = 4
-    # 
-    #     # initialize workspace
-    #     phy.calc_node_root_distances(return_leaf_distances_only=False)
-    #     heights    = np.zeros( (tree_width, num_tree_col) )
-    #     states     = np.zeros( (tree_width, num_char_col) )
-    #     state_idx  = 0
-    #     height_idx = 0
-    # 
-    #     # postorder traversal to rotate nodes by max-root-distance
-    #     for nd in phy.postorder_node_iter():
-    #         if nd.is_leaf():
-    #             nd.max_root_distance = nd.root_distance
-    #         else:
-    #             children                  = nd.child_nodes()
-    #             ch_max_root_distance      = [ ch.max_root_distance for ch in children ]
-    #             ch_max_root_distance_rank = np.argsort( ch_max_root_distance )[::-1]  # [0,1] or [1,0]
-    #             children_reordered        = [ children[i] for i in ch_max_root_distance_rank ]
-    #             nd.max_root_distance      = max(ch_max_root_distance)
-    #             nd.set_children(children_reordered)
-    # 
-    #     # inorder traversal to fill matrix
-    #     last_int_node = phy.seed_node
-    #     last_int_node.edge.length = 0
-    #     for nd in phy.inorder_node_iter():
-    #         if nd.is_leaf():
-    #             heights[height_idx,0] = nd.root_distance - last_int_node.root_distance
-    #             if tree_encode_type == 'height_brlen':
-    #                 heights[height_idx,2] = nd.edge.length
-    #             states[state_idx,:]   = dat[nd.taxon.label].to_list()
-    #             state_idx += 1
-    #         else:
-    #             heights[height_idx+1,1] = nd.root_distance
-    #             if tree_encode_type == 'height_brlen':
-    #                 heights[height_idx+1,3] = nd.edge.length
-    #             last_int_node = nd
-    #             height_idx += 1
-    # 
-    #     # stack the phylo and states tensors
-    #     if rescale:
-    #         heights = heights / np.max(heights)
-    #     phylo_tensor = np.hstack( [heights, states] )
-    # 
-    #     return phylo_tensor
 
     def make_pca(self):
         """

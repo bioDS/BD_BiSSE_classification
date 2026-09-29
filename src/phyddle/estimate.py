@@ -9,6 +9,9 @@ for a new empirical dataset.
 Authors:   Michael Landis and Ammon Thompson
 Copyright: (c) 2022-2025, Michael Landis and Ammon Thompson
 License:   MIT
+# Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
+# Changes made in order to adapt phyddle for training graph neural networks on binary classification of birth-death models.
+# We read the graphs to estimate labels for in with batches to avoid running out of memory.
 """
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
@@ -46,8 +49,6 @@ import rpy2
 import rpy2.robjects as robjects
 from rpy2.robjects.packages import importr, data
 r = robjects.r
-# r['source']('~/AIphylo/phyddle/workspace/pj_phyddle/MLE/mle.R')
-# get_mle = r['get_mle_label']
 
 
 
@@ -58,11 +59,8 @@ from phyddle import network
 
 
 def custom_collate(batch):
-    #print(">>> ENTERED CUSTOM COLLATE <<<", flush=True)
-    #phy, graphs, aux, idx, lbl_num, lbl_cat = zip(*batch)
     graphs, idx, lbl_num, lbl_cat = zip(*batch)
     
-    #graphs = Batch.from_data_list(graphs) # needed if not using cuda
     return (
         #torch.stack(phy), 
         list(graphs), # remove list() if not using cuda
@@ -572,6 +570,7 @@ class Estimator:
             self.mymodel = DataParallel(self.mymodel)
         self.mymodel.to(self.TORCH_DEVICE)
 
+        # We process data from the HDF5 file in blocks
         with h5py.File(hdf5_fn, "r") as f:
             N = f["phy_data"].shape[0]
             self.label_names = [s.decode() for s in f['label_names'][0,:] ]
@@ -594,10 +593,10 @@ class Estimator:
         print("out for estimated cats:, ", out_est_labels_cat_fn)
         print("mode:", mode)
 
+        # For each epoch, load data in blocks and estimate labels
         for j in range(len(self.estimate_dataset)):
             graph_list = self.estimate_dataset[j]
             loader = DataListLoader(graph_list, batch_size=self.trn_batch_size)
-            # print("mean, sd:", self.train_labels_num_mean_sd)
             first_batch = True
             for batch in loader:
                 lbl_cat = torch.cat([g.lbl_cat for g in batch], dim=0).to(self.TORCH_DEVICE)
@@ -616,17 +615,8 @@ class Estimator:
                     print("exception in lbls_est", e)
                     raise
 
-                # real vs. cat estimates
                 labels_est_num = label_est[3]
-                # print("labels_est_num", labels_est_num)
-                # print("labels_est_num:", labels_est_num)
-                # amax = labels_est_cat.argmax(dim=1)
-
-                # # force categorical dimensionality (had problems for categ)
-                # for k,v in labels_est_cat.items():
-                #     labels_est_cat[k] = torch.reshape(input=labels_est_cat[k],
-                #                                       shape=(self.graph_data.shape[0],-1))
-
+               
                 csv_mode = "a"
                 header = False
                 if j == 0 and first_batch:
@@ -634,19 +624,11 @@ class Estimator:
                     first_batch = False
                     # header = True
                 # save label cat estimates
-                # print("estimates", labels_est_num)
                 df_est_labels_cat = pd.DataFrame((labels_est_num.cpu().detach().argmax(dim=1).flatten()))
-                #self.format_label_cat(labels_est_cat)
                 df_est_labels_cat = pd.concat( [pd.DataFrame(batch_idx), df_est_labels_cat], axis=1 )
-                # print("writing estimates")
                 df_est_labels_cat.to_csv(out_est_labels_cat_fn, index=False, sep=',',
                                         float_format=util.PANDAS_FLOAT_FMT_STR, header=header, mode=csv_mode)
 
-
-                    
-                    # for k,v in labels_est_cat.items():
-                    #     labels_est_cat[k] = labels_est_cat[k].cpu().detach().numpy()
-                
                 if mode == 'sim':
                     df_true_labels_cat = pd.DataFrame(lbl_cat.cpu().detach(), columns=self.label_cat_names, dtype='int')
                     df_true_labels_cat = pd.concat( [pd.DataFrame(batch_idx), df_true_labels_cat], axis=1)
@@ -654,16 +636,10 @@ class Estimator:
                 if self.has_aux:
                         df_true_aux = pd.DataFrame(aux_dat.cpu().detach().squeeze(1), dtype='float')
                         df_true_aux = pd.concat( [pd.DataFrame(batch_idx), df_true_aux], axis=1)
-                        
-                        # df_true_aux.columns = ["idx"] + self.aux_names
                         df_true_aux.to_csv(out_true_aux_fn, index=False, sep=',', header=header, mode=csv_mode)
                 
                 if mode == 'emp':
-                    # self.est_labels_num_raw = denorm_est_labels_num
-                    self.est_true_aux_raw = aux_dat #util.denormalize(aux_dat,
-                                                #         self.train_aux_data_mean_sd,
-                                                #         exp=False)
-                   
+                    self.est_true_aux_raw = aux_dat 
         # done
         return
     

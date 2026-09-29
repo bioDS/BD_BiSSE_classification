@@ -9,6 +9,11 @@ pipeline steps, then compiles them into a standard pdf report.
 Authors:   Michael Landis and Ammon Thompson
 Copyright: (c) 2022-2025, Michael Landis and Ammon Thompson
 License:   MIT
+
+# Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
+# Changes made in order to adapt phyddle for inspecting results from training graph neural networks on binary classification 
+# of birth-death models.
+# However, for our final result we use our own plotting code rather than these functions.
 """
 
 # standard imports

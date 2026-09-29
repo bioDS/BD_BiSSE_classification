@@ -8,10 +8,10 @@ PyTorch.
 Authors:   Michael Landis and Ammon Thompson
 Copyright: (c) 2022-2025, Michael Landis and Ammon Thompson
 License:   MIT
-"""
 
-# standard imports
-#   none
+# Edits made by Kate Truman and AI tools (e.g. ChatGPT and Claude) to train Graph Neural Networks instead of Convolutional Neural Networks
+# We use graph neural network code from Leroy et al. 2025, see: https://github.com/ameliemelo/Phylo_Inference/
+"""
 
 # external imports
 import numpy as np
@@ -26,13 +26,7 @@ import torch.nn.functional as F
 from torch_scatter import scatter_add
 import random
 
-# phyddle imports
-# from phyddle import utilities as util
-
-##################################################
-
-# https://github.com/ameliemelo/Phylo_Inference/blob/main/BiSSE/GNN_PhyloPool.py
-
+# From Leroy et al., used for PhyloPool
 def get_valid_node_indices(initial_num_nodes):
     num_conv_layers=3
     pooling_factor = 2
@@ -42,6 +36,7 @@ def get_valid_node_indices(initial_num_nodes):
         valid_node_count = (valid_node_count - (ker_size//2)-(ker_size//2)) // pooling_factor
     return valid_node_count
 
+# From Leroy et al., used for PhyloPool
 def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
     if batch is None and max_num_nodes is None:
         mask = torch.ones(1, x.size(0), dtype=torch.bool, device=x.device)
@@ -60,6 +55,12 @@ def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
     out = out.view([batch_size, max_num_nodes] + list(x.size())[1:])
     return out, num_nodes
 
+
+# Combines Phyddle code with code from Leroy et al. Defines a graph neural network with n_layers + 2 graph convolutional layers 
+# (n_layers was intended to represent the total number of graph convolutional layers, but currently represents the ones with input and output dimensions hidden_channels.
+# The first and last graph convolutional layer have different dimensions. )
+# We also use the following code as a starting point: https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
+# This network uses average pooling.
 class GCN_avg(torch.nn.Module):
     def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda, dropout=0.01, activation_function = 'relu', extra_layers=False, n_layers = 4):
         super(GCN_avg, self).__init__()
@@ -130,7 +131,11 @@ class GCN_avg(torch.nn.Module):
         return  x
 
 
-
+# Combines Phyddle code with code from Leroy et al. Defines a graph neural network with n_layers + 2 graph convolutional layers 
+# (n_layers was intended to represent the total number of graph convolutional layers, but currently represents the ones with input and output dimensions hidden_channels.
+# The first and last graph convolutional layer have different dimensions. )
+# We also use the following code as a starting point: https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4 
+# This network uses time-aware pooling (see PhyloPool in Leroy et al.)
 class GCN_PhyloPool(torch.nn.Module):
     def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda, ker_size=5, n_parts=10, dropout=0.01, activation_function='relu', extra_layers=False, n_layers=3):
         super(GCN_PhyloPool, self).__init__()
@@ -234,8 +239,6 @@ class GCN_PhyloPool(torch.nn.Module):
         out = self.dropout(out)
         out = self.fc2(out)
         return out
-
-# https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
 
 
 

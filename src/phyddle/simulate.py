@@ -9,6 +9,9 @@ used to train the neural network.
 Authors:   Michael Landis and Ammon Thompson
 Copyright: (c) 2022-2025, Michael Landis and Ammon Thompson
 License:   MIT
+
+# Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
+# Changes made in order to adapt phyddle for training graph neural networks on binary classification of birth-death models.
 """
 
 # standard imports
@@ -238,7 +241,9 @@ class Simulator:
         start_time,start_time_str = util.get_time()
         util.print_str(f'▪ Start time of {start_time_str}', verbose)
 
-        # simulate replicate IDs to generate
+        # Simulate replicate IDs to generate trees for.
+        # To improve uniformity of the distribution of number of tips, we divide the domain of 100 to 1000 tips into 20 bins,
+        # and try to generate self.sim_batch_size trees for each bin.
         self.rep_idx = self.get_rep_idx()
         print("rep idx", self.rep_idx)
         self.bins_start = np.linspace(100,(1000-(900/20)),20)
@@ -282,12 +287,7 @@ class Simulator:
                         smoothing=0)
                      )
             
-        # else:
-        #     # serial jobs
-        #     res = [ self.sim_one(idx, k) for idx, k in tqdm(zip(self.rep_idx, self.bins_start, self.bins_end),
-        #                                               total=len(self.rep_idx),
-        #                                               desc='Simulating in serial',
-        #                                               smoothing=0) ]
+        
 
         # verify Simulate produced appropriate output for Format
         self.check_valid_output()
@@ -334,11 +334,7 @@ class Simulator:
         min_taxa = int(min_taxa)
         max_taxa = int(max_taxa)
         print("passed args", idx, min_taxa, max_taxa)
-        # get filesystem info for generic job
-        # tmp_fn     = f'{self.sim_dir}/{self.sim_prefix}.{idx}'
         cmd_str    = f'{self.sim_command} {self.sim_dir} {self.sim_prefix} {idx} {self.sim_batch_size} {min_taxa} {max_taxa}'
-        # stdout_fn  = f'{tmp_fn}.stdout.log'
-        # stderr_fn  = f'{tmp_fn}.stderr.log'
         # run generic job
         num_attempt = 10
         valid = False
@@ -348,13 +344,7 @@ class Simulator:
                 cmd_str_tok = cmd_str.split(' ')
                 # run command
                 cmd_res = subprocess.run(cmd_str_tok, capture_output=True)
-                # save stdout
-                # cmd_stdout = cmd_res.stdout.decode('UTF-8')
-                # util.write_to_file(cmd_stdout, stdout_fn)
-                # save stderr
-                # cmd_stderr = cmd_res.stderr.decode('UTF-8')
-                # if cmd_stderr != '':
-                #    util.write_to_file(cmd_stderr, stderr_fn)
+                
                 # done simulating
                 valid = True
             except subprocess.CalledProcessError:
