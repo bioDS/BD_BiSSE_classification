@@ -11,10 +11,13 @@ License:   MIT
 
 # Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
 # Changes made in order to adapt phyddle for training graph neural networks on binary classification of birth-death models.
+# Packed-simulation support: trees/BD_div and trees/BiSSE (one tree per line + parameter csv)
+# are unpacked into out.N.tre / out.N.labels.csv / out.N.dat.csv before encoding.
 """
 # standard imports
 # import copy
 import os
+import re
 import sys
 
 from collections import defaultdict
@@ -69,6 +72,62 @@ try:
     set_start_method('fork')
 except RuntimeError:
     pass
+
+##################################################
+# Packed-simulation helpers
+##################################################
+
+# subfolder of <sim_dir>/trees : model_type (matches labels.csv convention)
+PACKED_MODELS = {
+    'BD_div': 0,
+    'BiSSE':  1,
+}
+
+# strips [...] comments (e.g. [&&NHX-t_s=1]) from newick strings
+_COMMENT_RE = re.compile(r'\[[^\]]*\]')
+# a tip label = a name that directly follows '(' or ',' (internal names follow ')')
+_TIP_RE = re.compile(r'(?<=[(,])([^,():;\[\]\s]+)((?:\[[^\]]*\])*)')
+
+
+def _log10(x, floor=1e-12):
+    """log10 that tolerates zeros (e.g. mu = 0 in BiSSE)."""
+    return float(np.log10(max(float(x), floor)))
+
+
+def _tip_states_nhx(newick, key='t_s', offset=1, required=True):
+    """Return {tip_label: state} read from NHX comments on the tips.
+
+    State is (value of key) - offset, so t_s = 1/2 becomes 0/1 by default.
+    If required is False, tips without the annotation get state 0.
+    """
+    key_re = re.compile(rf'{re.escape(key)}=(\d+)')
+    out = {}
+    for m in _TIP_RE.finditer(newick):
+        label, comment = m.group(1), m.group(2)
+        k = key_re.search(comment)
+        if k is None:
+            if required:
+                raise ValueError(f'Tip "{label}" has no {key} annotation')
+            out[label] = 0
+            continue
+        s = int(k.group(1)) - offset
+        if s not in (0, 1):
+            raise ValueError(f'Tip "{label}": state {s} not in {{0,1}} '
+                             f'(check packed_state_offset)')
+        out[label] = s
+    return out
+
+
+def _extant_tip_labels(clean_newick, tol):
+    """Labels of tips whose root-distance is within tol (relative) of the max."""
+    tr = dp.Tree.get(data=clean_newick, schema='newick',
+                     preserve_underscores=True,
+                     suppress_internal_node_taxa=True)
+    tr.calc_node_root_distances(return_leaf_distances_only=False)
+    leaves = tr.leaf_nodes()
+    dmax = max(nd.root_distance for nd in leaves)
+    cut = dmax * (1.0 - max(tol, 1e-6))
+    return [nd.taxon.label for nd in leaves if nd.root_distance >= cut]
 
 ##################################################
 
@@ -140,12 +199,6 @@ class Formatter:
         self.downsample_taxa    = str(args['downsample_taxa'])
         self.rel_extant_age_tol = float(args['rel_extant_age_tol'])
         self.tree_encode        = str(args['tree_encode'])
-        self.encode_all_sim     = bool(args['encode_all_sim'])
-        self.start_idx          = int(args['start_idx'])
-        self.end_idx            = int(args['end_idx'])
-        self.downsample_taxa    = str(args['downsample_taxa'])
-        self.rel_extant_age_tol = float(args['rel_extant_age_tol'])
-        self.tree_encode        = str(args['tree_encode'])
         self.char_encode        = str(args['char_encode'])
         self.brlen_encode       = str(args['brlen_encode'])
         self.char_format        = str(args['char_format'])
@@ -157,6 +210,15 @@ class Formatter:
         self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
         self.save_graph_csv = bool(args['save_graph_csv'])
         self.select_classes = list(args['select_classes'])
+
+        # packed simulations (trees/BD_div, trees/BiSSE); all optional
+        self.packed_in_dir        = str(args['packed_in_dir'])    # folder holding BD_div/ and BiSSE/ (e.g. .../Simulations/trees)
+        self.packed_out_dir       = str(args['packed_out_dir'])   # where unpacked out.N.* files go (e.g. 'simulate')
+        self.packed_models        = dict(args['packed_models'])
+        self.packed_tre_fn        = None if args['packed_tre_fn'] in (None, '') else str(args['packed_tre_fn'])   # trees file name override
+        self.packed_par_fn        = None if args['packed_par_fn'] in (None, '') else str(args['packed_par_fn'])   # params csv name override
+        self.packed_state_key     = str(args['packed_state_key'])
+        self.packed_state_offset  = int(args['packed_state_offset'])
 
         # features of interest 
         self.aux_data = ["log10_tree_length","log10_root_age","log10_brlen_mean","log10_age_mean","log10_B1","colless","age_var","brlen_var","treeness","N_bar","f_dat_0","n_dat_0","f_dat_1","n_dat_1","num_taxa","prop_taxa"]
@@ -192,6 +254,159 @@ class Formatter:
         # done
         return
 
+    ##########################################################
+    # Packed-simulation unpacking
+    ##########################################################
+
+    def _find_packed_files(self, sub):
+        """Return (trees_path, params_path) for one packed model (e.g. 'BD_div').
+
+        Trees:      <packed_in_dir>/<sub>/<packed_tre_fn>
+        Parameters: <packed_in_dir>/<sub>/<packed_par_fn>, else
+                    <packed_in_dir>/<packed_par_fn>
+        If a file name is not given, the first matching file in the folder is used.
+        """
+        tre_dir = os.path.join(self.packed_in_dir, sub)
+        par_root =  self.packed_in_dir
+
+        # trees file
+        tre_path = None
+        if self.packed_tre_fn:
+            tre_path = os.path.join(tre_dir, self.packed_tre_fn)
+        elif os.path.isdir(tre_dir):
+            cand = sorted(f for f in os.listdir(tre_dir)
+                          if os.path.isfile(os.path.join(tre_dir, f))
+                          and not f.endswith('.csv'))
+            if cand:
+                tre_path = os.path.join(tre_dir, cand[0])
+        if tre_path is None or not os.path.exists(tre_path):
+            raise FileNotFoundError(f'Cannot find trees file for {sub}: {tre_path}')
+
+        # parameters file: try <par_root>/<sub>/ first, then <par_root>/
+        par_path = None
+        tried = []
+        for d in (os.path.join(par_root, sub), par_root):
+            if self.packed_par_fn:
+                p = os.path.join(d, self.packed_par_fn)
+                tried.append(p)
+                if os.path.exists(p):
+                    par_path = p
+                    break
+            elif os.path.isdir(d):
+                cand = sorted(f for f in os.listdir(d) if f.endswith('.csv'))
+                if cand:
+                    par_path = os.path.join(d, cand[0])
+                    break
+        if par_path is None:
+            raise FileNotFoundError(f'Cannot find parameters csv for {sub}. Tried: '
+                                    + ', '.join(tried or [par_root]))
+        return tre_path, par_path
+
+    def _labels_bd(self, row):
+        # BD columns: index, turnover_rate, birth_rate, extinction_rate,
+        #             sampling_frac, tree_size
+        return {'log10_birth_rate': _log10(row['birth_rate']),
+                'log10_death_rate': _log10(row['extinction_rate'])}
+
+    def _labels_bisse(self, row):
+        # BiSSE columns: index, lambda1, lambda2, turnover, sampling_frac,
+        #   tree_size, mu1, mu2, net_rate1, net_rate2, q01, q10,
+        #   lambda2_ratio, q01_ratio
+        return {'log10_birth_rate_t1': _log10(row['lambda1']),
+                'log10_birth_rate_t2': _log10(row['lambda2']),
+                'log10_death_rate_t1': _log10(row['mu1']),
+                'log10_death_rate_t2': _log10(row['mu2']),
+                'log10_trans_01':      _log10(row['q01']),
+                'log10_trans_10':      _log10(row['q10']),
+                'trans_10':            float(row['q10'])}   # raw, as in old header
+
+    def _write_dat_csv(self, path, tree_str, model_type):
+        """Write 'taxa,data' csv of extant-tip states for one tree.
+
+        data = (NHX t_s value) - packed_state_offset, so t_s 1/2 -> 0/1.
+        Only extant tips are written. BD trees without t_s get data = 0.
+        """
+        clean = _COMMENT_RE.sub('', tree_str)
+        extant = _extant_tip_labels(clean, self.rel_extant_age_tol)
+        states = _tip_states_nhx(tree_str,
+                                 key=self.packed_state_key,
+                                 offset=self.packed_state_offset,
+                                 required=(model_type != 0))
+        with open(path, 'w') as f:
+            f.write('taxa,data\n')
+            for label in extant:
+                f.write(f'{label},{states[label]}\n')
+
+    def unpack_packed_sims(self):
+        """Split packed tree/parameter files into per-replicate files.
+
+        Reads <sim_dir>/<packed_subdir>/<model>/ (one tree per line + one
+        parameter csv) and writes <packed_out_dir>/<sim_prefix>.N.tre,
+        .N.labels.csv and .N.dat.csv with a global counter N across models, so BD and
+        BiSSE replicates never collide. Only models whose model_type is in
+        select_classes are unpacked. Returns True if packed data was used.
+        """
+        root = self.packed_in_dir
+        if not os.path.isdir(root):
+            # no packed data: fall back to ordinary out.N.* files in sim_dir
+            util.print_warn(f'Packed tree folder not found: {root}. '
+                            f'Using existing files in {self.sim_dir} instead.')
+            return False
+
+        out_dir = self.packed_out_dir
+        os.makedirs(out_dir, exist_ok=True)
+
+        # skip if already unpacked with the same class selection
+        sentinel = os.path.join(root, '.unpacked')
+        sel_key = ','.join(str(c) for c in sorted(self.select_classes))
+        if os.path.exists(sentinel):
+            with open(sentinel) as f:
+                if f.read().strip() == sel_key:
+                    self.sim_dir = out_dir   # rest of Format reads from here
+                    return True
+
+        makers = {'BD_div': self._labels_bd, 'BiSSE': self._labels_bisse}
+        n = 0
+        for sub, model_type in self.packed_models.items():
+            if model_type not in self.select_classes:
+                continue
+            folder = os.path.join(root, sub)
+            if not os.path.isdir(folder) or sub not in makers:
+                util.print_warn(f'Skipping packed model folder {folder}')
+                continue
+            tre_path, par_path = self._find_packed_files(sub)
+
+            params = pd.read_csv(par_path, skipinitialspace=True)
+            params.columns = [c.strip() for c in params.columns]
+            with open(tre_path) as f:
+                trees = [ln.strip() for ln in f if ln.strip()]
+
+            if len(trees) != len(params):
+                raise ValueError(f'{sub}: {len(trees)} trees but {len(params)} '
+                                 f'parameter rows ({tre_path}, {par_path})')
+
+            for tree_str, (_, row) in tqdm(list(zip(trees, params.iterrows())),
+                                           desc=f'Unpacking {sub}'):
+                if not tree_str.endswith(';'):
+                    tree_str += ';'
+                base = f'{out_dir}/{self.sim_prefix}.{n}'
+                with open(base + '.tre', 'w') as f:
+                    f.write(_COMMENT_RE.sub('', tree_str) + '\n')
+                lbl = makers[sub](row)
+                lbl['model_type'] = model_type
+                pd.DataFrame([lbl]).to_csv(base + '.labels.csv', index=False)
+                self._write_dat_csv(base + '.dat.csv', tree_str, model_type)
+                n += 1
+            util.print_str(f'▪ Unpacked {len(trees)} {sub} trees', self.verbose)
+
+        with open(sentinel, 'w') as f:
+            f.write(sel_key)
+        if n > 0:
+            self.sim_dir = out_dir   # rest of Format reads from here
+        return n > 0
+
+    ##########################################################
+
     def run(self):
         """Formats all raw datasets into tensors.
 
@@ -202,6 +417,10 @@ class Formatter:
         """
         
         verbose = self.verbose
+
+        # convert packed trees/BD_div, trees/BiSSE files into per-replicate files
+        if not self.no_sim:
+            self.unpack_packed_sims()
 
         valid_emp = self.has_valid_dataset(mode='emp')
         valid_sim = self.has_valid_dataset(mode='sim')
@@ -284,7 +503,7 @@ class Formatter:
             addition = self.block_size
             if (addition + rep_pos > len(self.rep_idx)):
                 addition = len(self.rep_idx) - rep_pos
-            while (rep_pos >= len(self.rep_idx)):
+            while (rep_pos < len(self.rep_idx)):
                 util.print_str('▪ Encoding empirical data as tensors', verbose, ' at pos', rep_pos)
                 self.encode_all(self.rep_idx[(rep_pos):(rep_pos+addition)], mode='emp')
                 util.print_str('▪ Combining and writing empirical data as tensors', verbose, ' at pos ', rep_pos)
@@ -363,7 +582,7 @@ class Formatter:
                 util.print_warn(f'Cannot find \'{dat_dir}/{f}.labels.csv\' but len(param_data) > 0.')
                 return False
             # if the 1-3 files exist, then we have 1+ valid datasets
-            if (has_dat or not self.use_input_dat) and (has_tre or self.use_input_tre) and has_lbl:
+            if (has_dat or not self.use_input_dat) and (has_tre or not self.use_input_tree) and has_lbl:
                 return True
     
         return False
@@ -814,13 +1033,6 @@ class Formatter:
         Trees are then binned into tree-width categories (number of columns for
         compact vector representation). Next, trees and character data are
         encoded into extended CBLV or CDV formats that contain additional state
-        encoded into extended CBLV or CDV formats that contain additional state
-        read from a tree file and data matrix file. The tree is filtered to
-        target ranges of taxon counts and pruned of non-extant taxa.
-        
-        Trees are then binned into tree-width categories (number of columns for
-        compact vector representation). Next, trees and character data are
-        encoded into extended CBLV or CDV formats that contain additional state
         and branch length information.
 
         Arguments:
@@ -1195,32 +1407,6 @@ class Formatter:
                                 tree_encode_type, idx, rescale)
         return cpvs
     
-    
-    #     # taxon labels must match for each phy and dat replicate
-    #     phy_labels = set([ n.taxon.label for n in phy.leaf_nodes() ])
-    #     dat_labels = set(dat.columns.to_list())
-    #     phy_missing = phy_labels.difference(dat_labels)
-    #     if len(phy_missing) != 0:
-    #         phy_missing = sorted(list(phy_missing))
-    #         # dat_missing = sorted(list(set(dat_labels).difference(set(phy_labels))))
-    #         err_msg = f'Missing taxon labels in dat but not in phy for replicate {idx}: '
-    #         # if len(phy_missing) > 0:
-    #         err_msg += ' '.join(phy_missing)
-    #         # if len(dat_missing) > 0:
-    #         #    err_msg += f' Missing from dat: {' '.join(dat_missing)}.'
-    #         raise ValueError(err_msg)
-    #     
-    #     cpvs = None
-    #     if tree_type == 'serial':
-    #         cpvs = self.encode_cblvs(phy, dat, tree_width,
-    #                                  tree_encode_type, rescale)
-    #     elif tree_type == 'extant':
-    #         cpvs = self.encode_cdvs(phy, dat, tree_width,
-    #                                 tree_encode_type, rescale)
-    #     else:
-    #         ValueError(f'Unrecognized {tree_type}')
-    #     return cpvs
-    # 
     def encode_cdvs(self, phy, dat, tree_width, tree_encode_type, rescale=True):
         """
         Encode Compact Diversity-reordered Vector + States (CDV+S) array
@@ -1248,56 +1434,7 @@ class Formatter:
         cdvs = util.encode_cdvs(phy, dat, tree_width,
                                 tree_encode_type, rescale)
         return cdvs
-    #     
-    #     # data dimensions
-    #     num_tree_col = 0
-    #     num_char_col = dat.shape[0]
-    #     if tree_encode_type == 'height_only':
-    #         num_tree_col = 1
-    #     elif tree_encode_type == 'height_brlen':
-    #         num_tree_col = 3
-    # 
-    #     # initialize workspace
-    #     phy.calc_node_root_distances(return_leaf_distances_only=False)
-    #     heights    = np.zeros( (tree_width, num_tree_col) )
-    #     states     = np.zeros( (tree_width, num_char_col) )
-    #     state_idx  = 0
-    #     height_idx = 0
-    # 
-    #     # postorder traversal to rotate nodes by clade-length
-    #     for nd in phy.postorder_node_iter():
-    #         if nd.is_leaf():
-    #             nd.treelen = 0.
-    #         else:
-    #             children           = nd.child_nodes()
-    #             ch_treelen         = [ (ch.edge.length + ch.treelen) for ch in children ]
-    #             nd.treelen         = sum(ch_treelen)
-    #             ch_treelen_rank    = np.argsort( ch_treelen )[::-1]
-    #             children_reordered = [ children[i] for i in ch_treelen_rank ]
-    #             nd.set_children(children_reordered)
-    # 
-    #     # inorder traversal to fill matrix
-    #     phy.seed_node.edge.length = 0
-    #     for nd in phy.inorder_node_iter():
-    #         
-    #         if nd.is_leaf():
-    #             if tree_encode_type == 'height_brlen':
-    #                 heights[height_idx,1] = nd.edge.length
-    #             states[state_idx,:]   = dat[nd.taxon.label].to_list()
-    #             state_idx += 1
-    #         else:
-    #             heights[height_idx,0] = nd.root_distance
-    #             if tree_encode_type == 'height_brlen':
-    #                 heights[height_idx,2] = nd.edge.length
-    #             height_idx += 1
-    # 
-    #     # stack the phylo and states tensors
-    #     if rescale:
-    #         heights = heights / np.max(heights)
-    #     phylo_tensor = np.hstack( [heights, states] )
-    # 
-    #     return phylo_tensor
-    # 
+
     def encode_cblvs(self, phy, dat, tree_width, tree_encode_type, rescale=True):
         """
         Encode Compact Bijective Ladderized Vector + States (CBLV+S) array
@@ -1434,4 +1571,3 @@ class Formatter:
             'aux_data_names': aux_data_names
             }
         return ret
-
