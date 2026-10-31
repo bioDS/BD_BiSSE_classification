@@ -69,8 +69,7 @@ class GCN_avg(torch.nn.Module):
         self.n_layers = n_layers
         self.gconv1 = GCNConv(num_node_features, hidden_channels) 
         self.gconv2 = GCNConv(hidden_channels, hidden_channels) 
-        self.gconv3 = GCNConv(hidden_channels, hidden_channels) 
-        self.gconv4 = GCNConv(hidden_channels, 2*hidden_channels) 
+        self.gconv3 = GCNConv(hidden_channels, 2*hidden_channels) 
         self.fc1  = torch.nn.Linear(2*hidden_channels, hidden_channels)
         self.fc2  = torch.nn.Linear(hidden_channels, num_classes)
         self.dropout = nn.Dropout(p=dropout)
@@ -92,29 +91,19 @@ class GCN_avg(torch.nn.Module):
         elif self.activation_func == 'leaky_relu':
             x = F.leaky_relu(x)
         x = self.dropout(x)
-        x = self.gconv2(x, edge_index)
-        if self.activation_func == 'relu':
-            x = F.relu(x)
-        elif self.activation_func == 'leaky_relu':
-            x = F.leaky_relu(x)
-        x = self.dropout(x)
+
+        for graph_layer in range(self.n_layers - 2):
+            x = self.gconv2(x, edge_index)
+            x = F.relu(x) 
+            x = self.dropout(x)
+            
         x = self.gconv3(x, edge_index)
         if self.activation_func == 'relu':
             x = F.relu(x)
         elif self.activation_func == 'leaky_relu':
             x = F.leaky_relu(x)
         x = self.dropout(x)
-            #print("extra layers")
-        for graph_layer in range(self.n_layers - 2):
-            x = self.gconv3(x, edge_index)
-            x = F.relu(x) 
-            x = self.dropout(x)
-        x = self.gconv4(x, edge_index)
-        if self.activation_func == 'relu':
-            x = F.relu(x)
-        elif self.activation_func == 'leaky_relu':
-            x = F.leaky_relu(x)
-        x = self.dropout(x)
+
         if pooling_method == "var":
             mean = global_mean_pool(x, batch)
             mean_sq = global_mean_pool(x ** 2, batch)
