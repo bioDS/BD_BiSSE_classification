@@ -11,8 +11,11 @@ License:   MIT
 
 # Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
 # Changes made in order to adapt phyddle for training graph neural networks on binary classification of birth-death models.
-# Packed-simulation support: trees/BD_div and trees/BiSSE (one tree per line + parameter csv)
-# are unpacked into out.N.tre / out.N.labels.csv / out.N.dat.csv before encoding.
+# Packed-simulation support. Expected layout:
+#     <packed_in_dir>/BD_div/train.nwk, train.txt, test.nwk, test.txt
+#     <packed_in_dir>/BiSSE/ train.nwk, train.txt, test.nwk, test.txt
+# (.nwk = trees, .txt = parameters). These are unpacked into
+# out.N.tre / out.N.labels.csv / out.N.dat.csv before encoding.
 """
 # standard imports
 # import copy
@@ -77,16 +80,34 @@ except RuntimeError:
 # Packed-simulation helpers
 ##################################################
 
-# subfolder of <sim_dir>/trees : model_type (matches labels.csv convention)
+# subfolder of <packed_in_dir> : model_type (matches labels.csv convention)
 PACKED_MODELS = {
     'BD_div': 0,
     'BiSSE':  1,
 }
 
+# default file names inside each model subfolder
+PACKED_DEFAULT_FILES = {
+    'packed_tre_fn_train': 'train.nwk',
+    'packed_par_fn_train': 'train.txt',
+    'packed_tre_fn_test':  'test.nwk',
+    'packed_par_fn_test':  'test.txt',
+}
+
+# strings treated as a missing tree / value
+_NA_STRINGS = ('', 'na', 'nan', 'null', 'none')
+
 # strips [...] comments (e.g. [&&NHX-t_s=1]) from newick strings
 _COMMENT_RE = re.compile(r'\[[^\]]*\]')
 # a tip label = a name that directly follows '(' or ',' (internal names follow ')')
 _TIP_RE = re.compile(r'(?<=[(,])([^,():;\[\]\s]+)((?:\[[^\]]*\])*)')
+
+
+def _arg(args, key, default):
+    """args[key], or default if the key is missing or None.
+    An explicit empty string is kept (used to skip a train/test set)."""
+    v = args.get(key, None) if hasattr(args, 'get') else None
+    return default if v is None else v
 
 
 def _log10(x, floor=1e-12):
@@ -211,14 +232,27 @@ class Formatter:
         self.save_graph_csv = bool(args['save_graph_csv'])
         self.select_classes = list(args['select_classes'])
 
-        # packed simulations (trees/BD_div, trees/BiSSE); all optional
-        self.packed_in_dir        = str(args['packed_in_dir'])    # folder holding BD_div/ and BiSSE/ (e.g. .../Simulations/trees)
+        # packed simulations. Layout:
+        #   <packed_in_dir>/BD_div/{train,test}.nwk + {train,test}.txt
+        #   <packed_in_dir>/BiSSE/ {train,test}.nwk + {train,test}.txt
+        self.packed_in_dir        = str(args['packed_in_dir'])    # parent folder holding BD_div/ and BiSSE/
+        self.packed_par_dir       = str(_arg(args, 'packed_par_dir', ''))  # optional; defaults to packed_in_dir
         self.packed_out_dir       = str(args['packed_out_dir'])   # where unpacked out.N.* files go (e.g. 'simulate')
-        self.packed_models        = dict(args['packed_models'])
-        self.packed_tre_fn        = None if args['packed_tre_fn'] in (None, '') else str(args['packed_tre_fn'])   # trees file name override
-        self.packed_par_fn        = None if args['packed_par_fn'] in (None, '') else str(args['packed_par_fn'])   # params csv name override
-        self.packed_state_key     = str(args['packed_state_key'])
-        self.packed_state_offset  = int(args['packed_state_offset'])
+        self.packed_models        = dict(_arg(args, 'packed_models', PACKED_MODELS))
+        self.packed_state_key     = str(_arg(args, 'packed_state_key', 't_s'))
+        self.packed_state_offset  = int(_arg(args, 'packed_state_offset', 1))
+
+        # tree / parameter file names inside each model subfolder
+        # (set a pair to '' to skip that set)
+        self.packed_tre_fn_train  = str(_arg(args, 'packed_tre_fn_train', PACKED_DEFAULT_FILES['packed_tre_fn_train']))
+        self.packed_par_fn_train  = str(_arg(args, 'packed_par_fn_train', PACKED_DEFAULT_FILES['packed_par_fn_train']))
+        self.packed_tre_fn_test   = str(_arg(args, 'packed_tre_fn_test',  PACKED_DEFAULT_FILES['packed_tre_fn_test']))
+        self.packed_par_fn_test   = str(_arg(args, 'packed_par_fn_test',  PACKED_DEFAULT_FILES['packed_par_fn_test']))
+
+        # fixed train/test split taken from the train/test files
+        self.fixed_split          = bool(args['fixed_split'])
+        self.packed_split         = {}                                # {'train': [NUM...], 'test': [NUM...]}
+        self.encoding_type = str(args['encoding_type'])
 
         # features of interest 
         self.aux_data = ["log10_tree_length","log10_root_age","log10_brlen_mean","log10_age_mean","log10_B1","colless","age_var","brlen_var","treeness","N_bar","f_dat_0","n_dat_0","f_dat_1","n_dat_1","num_taxa","prop_taxa"]
@@ -258,48 +292,25 @@ class Formatter:
     # Packed-simulation unpacking
     ##########################################################
 
-    def _find_packed_files(self, sub):
+    def _find_packed_files(self, sub, tre_fn, par_fn):
         """Return (trees_path, params_path) for one packed model (e.g. 'BD_div').
 
-        Trees:      <packed_in_dir>/<sub>/<packed_tre_fn>
-        Parameters: <packed_in_dir>/<sub>/<packed_par_fn>, else
-                    <packed_in_dir>/<packed_par_fn>
-        If a file name is not given, the first matching file in the folder is used.
+        Trees:      <packed_in_dir>/<sub>/<tre_fn>          (e.g. BiSSE/train.nwk)
+        Parameters: <packed_par_dir>/<sub>/<par_fn>          (e.g. BiSSE/train.txt)
+                    else <packed_par_dir>/<par_fn>
+        If packed_par_dir is empty it defaults to packed_in_dir, so by default
+        trees and parameters sit side by side in the same model folder.
         """
-        tre_dir = os.path.join(self.packed_in_dir, sub)
-        par_root =  self.packed_in_dir
-
-        # trees file
-        tre_path = None
-        if self.packed_tre_fn:
-            tre_path = os.path.join(tre_dir, self.packed_tre_fn)
-        elif os.path.isdir(tre_dir):
-            cand = sorted(f for f in os.listdir(tre_dir)
-                          if os.path.isfile(os.path.join(tre_dir, f))
-                          and not f.endswith('.csv'))
-            if cand:
-                tre_path = os.path.join(tre_dir, cand[0])
-        if tre_path is None or not os.path.exists(tre_path):
+        tre_path = os.path.join(self.packed_in_dir, sub, tre_fn)
+        if not os.path.exists(tre_path):
             raise FileNotFoundError(f'Cannot find trees file for {sub}: {tre_path}')
 
-        # parameters file: try <par_root>/<sub>/ first, then <par_root>/
-        par_path = None
-        tried = []
-        for d in (os.path.join(par_root, sub), par_root):
-            if self.packed_par_fn:
-                p = os.path.join(d, self.packed_par_fn)
-                tried.append(p)
-                if os.path.exists(p):
-                    par_path = p
-                    break
-            elif os.path.isdir(d):
-                cand = sorted(f for f in os.listdir(d) if f.endswith('.csv'))
-                if cand:
-                    par_path = os.path.join(d, cand[0])
-                    break
+        par_root = self.packed_par_dir or self.packed_in_dir
+        tried = [os.path.join(par_root, sub, par_fn), os.path.join(par_root, par_fn)]
+        par_path = next((p for p in tried if os.path.exists(p)), None)
         if par_path is None:
-            raise FileNotFoundError(f'Cannot find parameters csv for {sub}. Tried: '
-                                    + ', '.join(tried or [par_root]))
+            raise FileNotFoundError(f'Cannot find parameters file for {sub}. Tried: '
+                                    + ', '.join(tried))
         return tre_path, par_path
 
     def _labels_bd(self, row):
@@ -337,14 +348,92 @@ class Formatter:
             for label in extant:
                 f.write(f'{label},{states[label]}\n')
 
+    def _read_tree_table(self, tre_path):
+        """Read a .nwk trees file into a list of (index or None, newick or None).
+
+        Accepts either
+          - one bare newick tree per line, or
+          - '<index><TAB or space><newick>' per line, optionally with a
+            header row (e.g. 'index<TAB>tree').
+        Missing trees (NA, empty) are kept as None so row positions are
+        preserved for position-based matching.
+        """
+        rows = []
+        first = True
+        with open(tre_path) as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                if ln.startswith('('):                       # bare newick
+                    key, tree = None, ln
+                else:
+                    parts = ln.split(None, 1)
+                    tok = parts[0].strip('"\'')
+                    rest = parts[1].strip().strip('"\'') if len(parts) > 1 else ''
+                    num = pd.to_numeric(tok, errors='coerce')
+                    if pd.isna(num):
+                        if first and tok.lower() not in _NA_STRINGS:
+                            first = False                    # header row
+                            continue
+                        key, tree = None, ln                 # e.g. a bare 'NA' line
+                    else:
+                        key, tree = float(num), rest
+                first = False
+                if tree.strip('"\'').lower() in _NA_STRINGS:
+                    tree = None
+                rows.append((key, tree))
+        return rows
+
+    def _read_param_table(self, par_path):
+        """Read a parameters .txt/.csv file (tab, comma, semicolon or
+        whitespace separated, delimiter detected from the header line).
+
+        Column names are stripped, unquoted and lower-cased. R-style files
+        with row names (header one field shorter than the data) are handled.
+        """
+        with open(par_path) as f:
+            header = next((ln for ln in f if ln.strip()), '')
+        if '\t' in header:
+            sep = '\t'
+        elif ',' in header:
+            sep = ','
+        elif ';' in header:
+            sep = ';'
+        else:
+            sep = r'\s+'
+        params = pd.read_csv(par_path, sep=sep, dtype=str, keep_default_na=False,
+                             engine='python', skipinitialspace=True)
+        params = params.reset_index(drop=True)   # drops R row names if present
+        params.columns = [str(c).strip().strip('"\'').lower() for c in params.columns]
+        params = params.apply(lambda s: s.astype(str).str.strip().str.strip('"\''))
+        return params
+
+    def _load_split_map(self, map_fn):
+        """Reload the fixed train/test NUM lists written by unpack_packed_sims."""
+        m = pd.read_csv(map_fn)
+        self.packed_split = {s: [int(x) for x in m.loc[m['split'] == s, 'num']]
+                             for s in ['train', 'test']}
+
     def unpack_packed_sims(self):
         """Split packed tree/parameter files into per-replicate files.
 
-        Reads <sim_dir>/<packed_subdir>/<model>/ (one tree per line + one
-        parameter csv) and writes <packed_out_dir>/<sim_prefix>.N.tre,
-        .N.labels.csv and .N.dat.csv with a global counter N across models, so BD and
-        BiSSE replicates never collide. Only models whose model_type is in
-        select_classes are unpacked. Returns True if packed data was used.
+        Expected layout:
+            <packed_in_dir>/BD_div/train.nwk, train.txt, test.nwk, test.txt
+            <packed_in_dir>/BiSSE/ train.nwk, train.txt, test.nwk, test.txt
+
+        Trees (.nwk) and parameters (.txt) are matched by their 'index'
+        column when both files have one; otherwise they are matched by row
+        position. Rows with a missing / NA tree are skipped.
+
+        Writes <packed_out_dir>/<sim_prefix>.N.tre, .N.labels.csv and .N.dat.csv
+        with a global counter N across models and splits.
+
+        If fixed_split is True the train/test split is exactly the train/test
+        files; if False they are pooled and split_examples() splits randomly.
+        The N values for each split are saved in
+        <packed_out_dir>/split_index_map.csv (num, model, split, orig_index).
+        Returns True if packed data was used.
         """
         root = self.packed_in_dir
         if not os.path.isdir(root):
@@ -355,52 +444,120 @@ class Formatter:
 
         out_dir = self.packed_out_dir
         os.makedirs(out_dir, exist_ok=True)
-
-        # skip if already unpacked with the same class selection
-        sentinel = os.path.join(root, '.unpacked')
-        sel_key = ','.join(str(c) for c in sorted(self.select_classes))
-        if os.path.exists(sentinel):
-            with open(sentinel) as f:
-                if f.read().strip() == sel_key:
-                    self.sim_dir = out_dir   # rest of Format reads from here
-                    return True
+        map_fn = os.path.join(out_dir, 'split_index_map.csv')
+        sentinel = os.path.join(out_dir, '.unpacked')
 
         makers = {'BD_div': self._labels_bd, 'BiSSE': self._labels_bisse}
-        n = 0
+
+        # list of (model folder, model_type, split name, trees path, params path)
+        jobs = []
         for sub, model_type in self.packed_models.items():
             if model_type not in self.select_classes:
                 continue
-            folder = os.path.join(root, sub)
-            if not os.path.isdir(folder) or sub not in makers:
-                util.print_warn(f'Skipping packed model folder {folder}')
+            sub_dir = os.path.join(root, sub)
+            if sub not in makers or not os.path.isdir(sub_dir):
+                util.print_warn(f'Skipping packed model folder {sub_dir}')
                 continue
-            tre_path, par_path = self._find_packed_files(sub)
+            for split, tfn, pfn in [('train', self.packed_tre_fn_train, self.packed_par_fn_train),
+                                    ('test',  self.packed_tre_fn_test,  self.packed_par_fn_test)]:
+                if not tfn or not pfn:      # this set not provided
+                    continue
+                tre_path, par_path = self._find_packed_files(sub, tfn, pfn)
+                jobs.append((sub, model_type, split, tre_path, par_path))
 
-            params = pd.read_csv(par_path, skipinitialspace=True)
-            params.columns = [c.strip() for c in params.columns]
-            with open(tre_path) as f:
-                trees = [ln.strip() for ln in f if ln.strip()]
+        if not jobs:
+            util.print_warn(f'No packed tree/parameter files found under {root}. '
+                            f'Using existing files in {self.sim_dir} instead.')
+            return False
 
-            if len(trees) != len(params):
-                raise ValueError(f'{sub}: {len(trees)} trees but {len(params)} '
-                                 f'parameter rows ({tre_path}, {par_path})')
+        # skip if already unpacked from the same inputs (files, timestamps,
+        # class selection and split mode)
+        sel_key = '|'.join(
+            ['classes=' + ','.join(str(c) for c in sorted(self.select_classes)),
+             f'fixed={int(self.fixed_split)}'] +
+            [f'{s}:{sp}:{os.path.abspath(t)}:{os.path.getmtime(t):.0f}:'
+             f'{os.path.abspath(p)}:{os.path.getmtime(p):.0f}'
+             for s, _, sp, t, p in jobs])
+        if os.path.exists(sentinel) and os.path.exists(map_fn):
+            with open(sentinel) as f:
+                if f.read().strip() == sel_key:
+                    self._load_split_map(map_fn)
+                    self.sim_dir = out_dir   # rest of Format reads from here
+                    util.print_str('▪ Packed simulations already unpacked; reusing '
+                                   f'files in {out_dir}', self.verbose)
+                    return True
 
-            for tree_str, (_, row) in tqdm(list(zip(trees, params.iterrows())),
-                                           desc=f'Unpacking {sub}'):
+        # remove out.N.* files left by a previous unpack (only if that unpack
+        # wrote a split map here, so user files are never touched)
+        if os.path.exists(map_fn):
+            stale = re.compile(rf'^{re.escape(self.sim_prefix)}\.\d+\.')
+            for fn in os.listdir(out_dir):
+                if stale.match(fn):
+                    os.remove(os.path.join(out_dir, fn))
+            os.remove(map_fn)
+        if os.path.exists(sentinel):
+            os.remove(sentinel)
+
+        n = 0
+        split_nums = {'train': [], 'test': []}
+        map_rows = []
+        for sub, model_type, split, tre_path, par_path in jobs:
+            tree_rows = self._read_tree_table(tre_path)
+            params = self._read_param_table(par_path)
+            label = f'{sub} ({split})'
+
+            has_idx_col = 'index' in params.columns
+            keyed = len(tree_rows) > 0 and all(k is not None for k, _ in tree_rows)
+
+            if keyed and has_idx_col:
+                # match by index
+                trees = {k: t for k, t in tree_rows if t}
+                p_key = pd.to_numeric(params['index'], errors='coerce').tolist()
+            else:
+                # match by row position
+                if len(tree_rows) != len(params):
+                    util.print_warn(f'{label}: {len(tree_rows)} trees in {tre_path} but '
+                                    f'{len(params)} parameter rows in {par_path}; '
+                                    f'matching by row position')
+                trees = {float(i): t for i, (_, t) in enumerate(tree_rows) if t}
+                p_key = [float(i) for i in range(len(params))]
+
+            n_skip = 0
+            n_done = 0
+            for i, (pk, (_, row)) in enumerate(tqdm(list(zip(p_key, params.iterrows())),
+                                                     desc=f'Unpacking {label}')):
+                tree_str = trees.get(float(pk)) if pd.notna(pk) else None
+                if tree_str is None:        # missing or NA tree
+                    n_skip += 1
+                    continue
                 if not tree_str.endswith(';'):
                     tree_str += ';'
+                try:
+                    lbl = makers[sub](row)
+                except KeyError as e:
+                    raise ValueError(f'Column {e} not found in {par_path}. '
+                                     f'Columns are: {list(params.columns)}') from None
+                lbl['model_type'] = model_type
+
                 base = f'{out_dir}/{self.sim_prefix}.{n}'
                 with open(base + '.tre', 'w') as f:
                     f.write(_COMMENT_RE.sub('', tree_str) + '\n')
-                lbl = makers[sub](row)
-                lbl['model_type'] = model_type
                 pd.DataFrame([lbl]).to_csv(base + '.labels.csv', index=False)
                 self._write_dat_csv(base + '.dat.csv', tree_str, model_type)
-                n += 1
-            util.print_str(f'▪ Unpacked {len(trees)} {sub} trees', self.verbose)
 
+                orig_index = row['index'] if has_idx_col else i + 1
+                split_nums[split].append(n)
+                map_rows.append((n, sub, split, orig_index))
+                n += 1
+                n_done += 1
+            util.print_str(f'▪ Unpacked {label}: {n_done} trees, '
+                           f'{n_skip} skipped (NA or missing tree)', self.verbose)
+
+        pd.DataFrame(map_rows, columns=['num', 'model', 'split', 'orig_index']
+                     ).to_csv(map_fn, index=False)
         with open(sentinel, 'w') as f:
             f.write(sel_key)
+        self.packed_split = split_nums
         if n > 0:
             self.sim_dir = out_dir   # rest of Format reads from here
         return n > 0
@@ -418,7 +575,7 @@ class Formatter:
         
         verbose = self.verbose
 
-        # convert packed trees/BD_div, trees/BiSSE files into per-replicate files
+        # convert packed BD_div/, BiSSE/ train/test files into per-replicate files
         if not self.no_sim:
             self.unpack_packed_sims()
 
@@ -607,7 +764,7 @@ class Formatter:
         """
 
         # construct list of encoding arguments
-        
+        print("encoding: ", self.encoding_type)
         assert mode in ['sim', 'emp']
         encode_path = ''
         if mode == 'sim':
@@ -717,6 +874,19 @@ class Formatter:
         
         split_idx = {}
         rep_idx = np.array(rep_idx)
+
+        # fixed split: use the train/test indices from the train/test files
+        if self.fixed_split:
+            if not self.packed_split:
+                raise RuntimeError('fixed_split is True but no packed train/test '
+                                   'data was found. Check packed_in_dir and the '
+                                   'packed_*_fn_train / packed_*_fn_test file names.')
+            avail = set(int(i) for i in rep_idx)
+            split_idx['train'] = np.array([i for i in self.packed_split['train'] if i in avail])
+            split_idx['test'] = np.array([i for i in self.packed_split['test'] if i in avail])
+            util.print_str(f"▪ Fixed split: {len(split_idx['train'])} train, "
+                           f"{len(split_idx['test'])} test", self.verbose)
+            return split_idx
         num_samples = len(rep_idx)
         
         # shuffle examples
@@ -1154,7 +1324,7 @@ class Formatter:
 
         phy_str = phy.as_string(schema="newick")
         global offset
-        graph_data_base = gen_graph(ape.read_tree(text=phy_str), offset=0)
+        graph_data_base = gen_graph(ape.read_tree(text=phy_str), offset=0, encoding=self.encoding_type)
 
         graph_data = gen_graph(ape.read_tree(text=phy_str), offset=0)
         n1 = pd.Series(graph_data[1].rx2('node1'))

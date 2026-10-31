@@ -213,6 +213,22 @@ def settings_registry():
         'n_layers_avg': {'step':'T','type':int,'section':'Train','default':4, 'help':'default graph convolutional layers for GNN-avg'},
         'n_layers_phylo' : {'step':'T', 'type':int,'section':'Train','default':3,'help':'default graph convolutional layers for GNN-phylo'},
 
+        # PhyloCNN data importing
+        'packed_models': {'step': 'F', 'type':dict, 'section':'Format', 'default':{'BD_div': 0, 'BiSSE': 1}, 'help':'mapping class names to integers'},
+        'packed_out_dir': {'step': 'F', 'type':str, 'section':'Format', 'default':"simulate", 'help':'where to save individual tree files'},
+        'packed_in_dir': {'step': 'F', 'type':str, 'section':'Format', 'default':"", 'help':'where to find tree file'},
+        'packed_par_dir': {'step': 'F', 'type':str, 'section':'Format', 'default':"", 'help':'where to find parameter file'},
+        'packed_tre_fn_train': {'step': 'F', 'type':str, 'section':'Format', 'default':"train.nwk", 'help':'filename for training trees'},
+        'packed_par_fn_train': {'step': 'F', 'type':str, 'section':'Format', 'default':"train.txt", 'help':'filename for training parameters'},
+        'packed_tre_fn_test': {'step': 'F', 'type':str, 'section':'Format', 'default':"test.nwk", 'help':'filename for testing trees'},
+        'packed_par_fn_test': {'step': 'F', 'type':str, 'section':'Format', 'default':"test.txt", 'help':'filename for testing parameters'},
+        'packed_state_key': {'step': 'F', 'type':str, 'section':'Format', 'default':"t_s", 'help':'label for states'},
+        'packed_state_offset': {'step': 'F', 'type':int, 'section':'Format', 'default':1, 'help':'difference from state labels to csv integer encoding'},
+        'fixed_split':           {'step': 'F',     'type': bool,    'section': 'Format', 'default':False, 'help': 'Whether to use existing training and testing split'},
+        'encoding_type':           {'step': 'F',     'type': str,    'section': 'Format', 'default':"graph", 'help': 'Which encoding to use - default GNN ("graph"), or phyloCNN encodings ("NC", "1N" or "2N")'},
+
+
+
 
         # estimating options
         'warn_aux_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.0001,      'help': 'Percentile to detect extreme empirical auxiliary (abs.) values.'},
