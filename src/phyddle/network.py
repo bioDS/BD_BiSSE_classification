@@ -87,7 +87,9 @@ def to_dense_batch(x, batch=None, fill_value = 0, max_num_nodes=2000):
 # We also use the following code as a starting point: https://colab.research.google.com/drive/1I8a0DfQ3fI7Njc62__mVXUlcAleUclnb?usp=sharing#scrollTo=HvhgQoO8Svw4
 # This network uses average pooling.
 class GCN_avg(torch.nn.Module):
-    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda, dropout=0.01, activation_function = 'relu', extra_layers=False, n_layers = 4):
+    def __init__(self, num_node_features, hidden_channels, num_classes, use_cuda, dropout=0.01, activation_function = 'relu', extra_layers=False, n_layers = 4, n_parts=None):
+        # n_parts is accepted so ParameterEstimationNetwork can pass it to every
+        # pooling network; mean pooling does not use it
         super(GCN_avg, self).__init__()
         torch.manual_seed(12345)
         self.extra_layers = extra_layers
@@ -486,4 +488,3 @@ class CrossEntropyLoss(nn.Module):
         loss = loss_func(predictions, targets.flatten())
         loss_list = [loss]  
         return torch.sum(torch.stack(loss_list))
-

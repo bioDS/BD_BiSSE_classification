@@ -419,9 +419,9 @@ class Trainer:
         self.log_dir                = str(args['log_dir'])
         
         # analysis settings
-        self.verbose            = bool(args['verbose'])
+        self.verbose            = _flag(args['verbose'])
         self.num_proc           = int(args['num_proc'])
-        self.use_parallel       = bool(args['use_parallel'])
+        self.use_parallel       = _flag(args['use_parallel'])
         
         # dataset dimensions
         self.num_char           = int(args['num_char'])
@@ -437,28 +437,28 @@ class Trainer:
         self.param_est          = dict(args['param_est'])
         self.param_data         = dict(args['param_data'])
         self.log_offset         = float(args['log_offset'])
-        self.save_phyenc_csv    = bool(args['save_phyenc_csv'])
+        self.save_phyenc_csv    = _flag(args['save_phyenc_csv'])
         
         # train settings
         self.n_val_blocks           = int(args['n_val_blocks'])
         self.num_epochs         = int(args['num_epochs'])
-        self.load_model         =bool(args['load_model'])
-        self.phylo_pool         =bool(args['phylo_pool'])
-        self.subtree_pool         =bool(args['subtree_pool'])
-        self.extra_layers       =bool(args['extra_layers'])
+        self.load_model         = _flag(args['load_model'])
+        self.phylo_pool         = _flag(args['phylo_pool'])
+        self.subtree_pool         = _flag(args['subtree_pool'])
+        self.extra_layers       = _flag(args['extra_layers'])
         self.phylo_n_layers     =int(args['n_layers_phylo'])
         self.avg_n_layers       =int(args['n_layers_avg'])
-        self.graph_conv         =bool(args['graph_conv'])
+        self.graph_conv         = _flag(args['graph_conv'])
         self.trn_batch_size     = int(args['trn_batch_size'])
         self.loss_numerical     = str(args['loss_numerical'])
-        self.use_cuda           = bool(args['use_cuda'])
+        self.use_cuda           = _flag(args['use_cuda'])
         self.num_early_stop     = int(args['num_early_stop'])
         self.learning_rate      = float(args['learning_rate'])
         self.activation_func    = str(args['activation_func'])
         self.optimizer          = str(args['optimizer'])
         self.hidden_size    = int(args['phy_hidden_size'])
         self.regularisation = str(args['regularisation'])
-        self.regression = bool(args['regression'])
+        self.regression = _flag(args['regression'])
         self.num_classes = int(args['num_classes'])    # replaced by the number of classes found in the data
         print("load model", args['load_model'], bool(args['load_model']))
         print("reg: ", args['regression'], " ", bool(args['regression']))
@@ -1043,7 +1043,8 @@ class CnnTrainer(Trainer):
                                                         n_layers = self.n_layers,
                                                         dropout=self.dropout,
                                                         activation_func=self.activation_func,
-                                                        args=self.args)
+                                                        args=self.args,
+                                                        n_parts=self.n_parts)
             self.model.phy_std.debug_dir = "debug_trees"
 
 
