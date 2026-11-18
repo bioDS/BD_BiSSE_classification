@@ -12,6 +12,8 @@ License:   MIT
 # Edits by Kate Truman, including supervision of AI tools to edit code and comments. 
 # Changes made in order to adapt phyddle for training graph neural networks on binary classification of birth-death models.
 # We read the graphs to estimate labels for in with batches to avoid running out of memory.
+# Added optional 'trained_model' and 'test_hdf5' settings so a trained model
+# and/or a test dataset can be loaded from any directory.
 """
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
@@ -34,6 +36,8 @@ import pandas as pd
 import h5py
 import torch
 import subprocess, pickle
+import importlib.util
+import types
 
 from torch_geometric.data import Dataset as Geoset, Data as GeoData, Batch
 from torch_geometric.loader import DataLoader as GeoLoader, DataListLoader
@@ -56,6 +60,39 @@ r = robjects.r
 # phyddle imports
 from phyddle import utilities as util
 from phyddle import network
+
+
+# suffix of trained model files written by Train
+TRAINED_MODEL_SUFFIX = '.trained_model.pkl'
+
+
+def load_network_module(path):
+    """Loads a network.py file (e.g. the version a model was trained with)
+    as a separate module, so it can be used in place of phyddle.network."""
+    name = 'phyddle._trained_network'
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = 'phyddle'   # allow relative imports in that file
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def make_network_pickle_module(network_module):
+    """Makes a pickle module for torch.load that builds classes saved from
+    phyddle.network using network_module instead. Everything else
+    (torch, torch_geometric, ...) is loaded as usual."""
+
+    class NetworkUnpickler(pickle.Unpickler):
+        def find_class(self, mod_name, name):
+            if mod_name in ('phyddle.network', 'network') and hasattr(network_module, name):
+                return getattr(network_module, name)
+            return super().find_class(mod_name, name)
+
+    m = types.ModuleType('phyddle_network_pickle')
+    m.Unpickler = NetworkUnpickler
+    m.load = lambda f, **kwargs: NetworkUnpickler(f, **kwargs).load()
+    return m
 
 
 def custom_collate(batch):
@@ -89,6 +126,13 @@ def load(args):
         return NotImplementedError
 
 
+def _optional_path(args, key):
+    """Returns an expanded path for an optional setting, or None if unset."""
+    v = args.get(key, None)
+    if v is None or str(v).strip() in ['', 'None', '__no_value__']:
+        return None
+    return os.path.abspath(os.path.expanduser(str(v)))
+
 
 class Estimator:
     """
@@ -121,6 +165,13 @@ class Estimator:
         self.est_dir            = str(args['est_dir'])
         self.sim_dir            = str(args['sim_dir'])
         self.log_dir            = str(args['log_dir'])
+
+        # optional overrides: a trained model (.trained_model.pkl or its
+        # prefix) and/or a test dataset (.hdf5) from any directory
+        self.trained_model_fn   = _optional_path(args, 'trained_model')
+        self.test_hdf5_fn       = _optional_path(args, 'test_hdf5')
+        # optional: network.py code the trained model was built with
+        self.trained_network_fn = _optional_path(args, 'trained_network')
 
         self.calc_MLE           =bool(args['calc_MLE'])
         
@@ -225,67 +276,163 @@ class Estimator:
         # done
         return
 
+    ##################################################
+    # Path helpers                                   #
+    ##################################################
+
+    def model_settings_str(self):
+        """Settings string shared by trained model and estimate filenames."""
+        return (f'{self.num_classes}.{self.dataset_size}.{self.batch_size}.'
+                f'{self.optimizer}.{self.scheduler}.{self.hidden_size}.'
+                f'{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.'
+                f'{self.n_layers}.{self.learning_rate}.{self.dropout}.'
+                f'{self.activation_func}.{self.regularisation}')
+
+    def get_training_prefix(self):
+        """Path prefix of the trained model and its trn_norm files.
+
+        If the 'trained_model' setting is given, it is used directly (with or
+        without the '.trained_model.pkl' suffix), so the model can live in any
+        directory. The trn_norm.*.csv files must sit beside it with the same
+        prefix. Otherwise the prefix is built from trn_dir, trn_prefix and the
+        training settings, as before.
+        """
+        if self.trained_model_fn is not None:
+            prefix = self.trained_model_fn
+            if prefix.endswith(TRAINED_MODEL_SUFFIX):
+                prefix = prefix[:-len(TRAINED_MODEL_SUFFIX)]
+            return prefix
+        return f'{self.trn_dir}/{self.trn_prefix}.{self.model_settings_str()}'
+
+    def get_hdf5_fn(self, mode='sim'):
+        """Path of the hdf5 dataset to estimate on.
+
+        If the 'test_hdf5' setting is given, it is used for the simulated
+        test dataset, so it can live in any directory. Otherwise the path is
+        {fmt_dir}/{fmt_prefix}.test.hdf5 (or .empirical.hdf5), as before.
+        """
+        assert mode in ['sim', 'emp']
+        if mode == 'sim' and self.test_hdf5_fn is not None:
+            return self.test_hdf5_fn
+        data_src = 'test' if mode == 'sim' else 'empirical'
+        return f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5'
+
+    def check_training_files(self):
+        """Exits with a clear message if trained model files are missing."""
+        prefix = self.get_training_prefix()
+        required = [ f'{prefix}{TRAINED_MODEL_SUFFIX}',
+                     f'{prefix}.trn_norm.aux_data.csv',
+                     f'{prefix}.trn_norm.attr_data.csv' ]
+        missing = [ fn for fn in required if not os.path.exists(fn) ]
+        if len(missing) > 0:
+            msg = 'Missing trained model file(s):\n  ' + '\n  '.join(missing)
+            if self.trained_model_fn is None:
+                msg += ('\nSet the trained_model setting to the path of a '
+                        '.trained_model.pkl file to use a specific model.')
+            util.print_err(msg, exit=True)
+        return
+
+    def resolve_param_est(self, label_names, hdf5_fn=''):
+        """Matches param_est keys to the label names stored in an hdf5 file.
+
+        An exact match is used if present. Otherwise names are compared after
+        lowercasing and removing '_', '-' and spaces, so 'model_type' in the
+        config matches 'modeltype' in the file (and vice versa). Matched keys
+        are renamed in self.param_est and self.args['param_est'] so that the
+        trainer used to read the hdf5 file sees the file's label names.
+        """
+        def norm(s):
+            return ''.join(c for c in str(s).lower() if c not in '_- ')
+
+        resolved = dict()
+        missing = list()
+        for k, v in self.param_est.items():
+            if k in label_names:
+                resolved[k] = v
+                continue
+            matches = [ name for name in label_names if norm(name) == norm(k) ]
+            if len(matches) == 1:
+                util.print_str(f"  ▪ param_est '{k}' matched to label '{matches[0]}'", self.verbose)
+                resolved[matches[0]] = v
+            else:
+                missing.append(k)
+
+        if len(missing) > 0:
+            util.print_err(f"param_est key(s) {missing} not found in {hdf5_fn}. "
+                           f"Labels in this file: {list(label_names)}. "
+                           f"Set param_est to the label(s) the model was trained on.", exit=True)
+
+        # update settings (copy args so the caller's dict is not changed)
+        self.param_est = resolved
+        self.args = dict(self.args)
+        self.args['param_est'] = dict(resolved)
+        self.label_num_names = [ k for k,v in resolved.items() if v == 'num' ]
+        self.label_cat_names = [ k for k,v in resolved.items() if v == 'cat' ]
+        self.has_label_num = len(self.label_num_names) > 0
+        self.has_label_cat = len(self.label_cat_names) > 0
+        return
+
     def tree_generator(self, file_names):
         for f in file_names:
             with open(f, "r") as open_f:
                 yield open_f.read()
 
-    def MLE(self, idx):
-        print("idx data:")
-        print(idx.iloc[:, 0])
-        file_names = [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
-        phylogenies = []
-        for f in file_names:
-            with open(f, "r") as open_file:
-                phylogenies.append(open_file.read())
+    # def MLE(self, idx):
+    #     print("idx data:")
+    #     print(idx.iloc[:, 0])
+    #     file_names = [f'{self.sim_dir}/{self.fmt_prefix}.{i}.tre' for i in idx.iloc[:, 0]]
+    #     phylogenies = []
+    #     for f in file_names:
+    #         with open(f, "r") as open_file:
+    #             phylogenies.append(open_file.read())
 
-        mle_labels = []
-        with ThreadPoolExecutor(max_workers=80) as executor:
-            futures = {executor.submit(self.single_mle, phy): i for i, phy in enumerate(phylogenies)}
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Calculating MLE", ncols=100):
-                mle_labels.append(future.result())
-        print("mle labels:")
-        print(mle_labels)  
-        mle_labels = np.array(mle_labels, dtype=float)
-        print(mle_labels)
-        return mle_labels
+    #     mle_labels = []
+    #     with ThreadPoolExecutor(max_workers=80) as executor:
+    #         futures = {executor.submit(self.single_mle, phy): i for i, phy in enumerate(phylogenies)}
+    #         for future in tqdm(as_completed(futures), total=len(futures), desc="Calculating MLE", ncols=100):
+    #             mle_labels.append(future.result())
+    #     print("mle labels:")
+    #     print(mle_labels)  
+    #     mle_labels = np.array(mle_labels, dtype=float)
+    #     print(mle_labels)
+    #     return mle_labels
 
 
-    def single_mle(self, phy):
-        p = subprocess.Popen(
-        ["python", "parallel_mle.py"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-        )
+    # def single_mle(self, phy):
+    #     p = subprocess.Popen(
+    #     ["python", "parallel_mle.py"],
+    #     stdin=subprocess.PIPE,
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.PIPE
+    #     )
 
-        def watchdog():
-            time.sleep(300)
-            if p.poll() is None:
-                print("time out")
-                p.kill()
-                return -1
+    #     def watchdog():
+    #         time.sleep(300)
+    #         if p.poll() is None:
+    #             print("time out")
+    #             p.kill()
+    #             return -1
 
-        timer = threading.Thread(target=watchdog, daemon=True)
-        timer.start()
-        try:
-            pickle.dump(phy, p.stdin)
-            p.stdin.close()
-            try:
-                mle_label = pickle.load(p.stdout)
-                # print(mle_label)
-            except Exception:
-                print("time out")
-                return -1
-        finally:
-            p.stdout.close()
-            p.stderr.close()
-            p.wait()
-        # if (p_val < 0.1):
-        #     return 1
-        # else:
-        #     return 0
-        return float(mle_label[0])
+    #     timer = threading.Thread(target=watchdog, daemon=True)
+    #     timer.start()
+    #     try:
+    #         pickle.dump(phy, p.stdin)
+    #         p.stdin.close()
+    #         try:
+    #             mle_label = pickle.load(p.stdout)
+    #             # print(mle_label)
+    #         except Exception:
+    #             print("time out")
+    #             return -1
+    #     finally:
+    #         p.stdout.close()
+    #         p.stderr.close()
+    #         p.wait()
+    #     # if (p_val < 0.1):
+    #     #     return 1
+    #     # else:
+    #     #     return 0
+    #     return float(mle_label[0])
     
     def run(self):
         """Executes all estimation tasks.
@@ -335,6 +482,13 @@ class Estimator:
         if device_info != '':
             util.print_str(device_info, verbose)
 
+        util.print_str(f'  ▪ trained model: {self.get_training_prefix()}{TRAINED_MODEL_SUFFIX}', verbose)
+        if self.trained_network_fn is not None:
+            util.print_str(f'  ▪ network code:  {self.trained_network_fn}', verbose)
+        if not self.no_sim:
+            util.print_str(f'  ▪ test data:     {self.get_hdf5_fn(mode="sim")}', verbose)
+
+        self.check_training_files()
         self.load_train_input()
         
         found_sim = False
@@ -359,10 +513,9 @@ class Estimator:
             # skip emp
             util.print_str('▪ Skipping empirical test input', verbose)
             
-        if self.has_valid_dataset(mode='emp'):
-            # load input
+        elif self.has_valid_dataset(mode='emp'):
+            # load input (make_results reads the hdf5 file in blocks)
             util.print_str('▪ Loading empirical input', verbose)
-            self.load_format_input(mode='emp')
     
             # make estimates
             util.print_str('▪ Making empirical estimates', verbose)
@@ -391,20 +544,20 @@ class Estimator:
         util.print_str('... done!', verbose)
 
         path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.dropout}.{self.activation_func}.{self.learning_rate}.{self.regularisation}'
-        out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
-        out_est_mle_vals_cat_fn = f'{path_prefix}_MLE_est.p_vals_cat.csv'
+        # out_est_mle_labels_cat_fn = f'{path_prefix}_MLE_est.labels_cat.csv'
+        # out_est_mle_vals_cat_fn = f'{path_prefix}_MLE_est.p_vals_cat.csv'
 
-        if self.calc_MLE:
-            self.mle_labels = self.MLE(self.idx_data)
+        # if self.calc_MLE:
+        #     self.mle_labels = self.MLE(self.idx_data)
 
-            print(out_est_mle_labels_cat_fn)
-            pd.DataFrame(self.mle_labels).to_csv(out_est_mle_vals_cat_fn, index=False, sep=',',
-                                      float_format=util.PANDAS_FLOAT_FMT_STR)
-            self.mle_labels =  np.where(self.mle_labels != -1, self.mle_labels < 0.1, -1).astype(int)
-            print("self.mle_labels")
-            print(self.mle_labels)
-            pd.DataFrame(self.mle_labels).to_csv(out_est_mle_labels_cat_fn, index=False, sep=',',
-                                      float_format=util.PANDAS_FLOAT_FMT_STR)
+        #     print(out_est_mle_labels_cat_fn)
+        #     pd.DataFrame(self.mle_labels).to_csv(out_est_mle_vals_cat_fn, index=False, sep=',',
+        #                               float_format=util.PANDAS_FLOAT_FMT_STR)
+        #     self.mle_labels =  np.where(self.mle_labels != -1, self.mle_labels < 0.1, -1).astype(int)
+        #     print("self.mle_labels")
+        #     print(self.mle_labels)
+        #     pd.DataFrame(self.mle_labels).to_csv(out_est_mle_labels_cat_fn, index=False, sep=',',
+        #                               float_format=util.PANDAS_FLOAT_FMT_STR)
 
 
 
@@ -454,36 +607,25 @@ class Estimator:
         return labels_num, labels_cat
 
     def has_valid_dataset(self, mode='sim'):
-        """Determines if empirical analysis is being performed.
+        """Determines if a dataset is available for estimation.
         
         Args:
             mode (str): 'sim' or 'emp' for simulated or empirical analysis.
             
         Returns:
-            bool: True if empirical analysis is being performed.
+            bool: True if the hdf5 file for this mode exists.
         """
         assert mode in ['sim', 'emp']
 
-        # check if empirical directory exists
-        if not os.path.exists(self.fmt_dir):
-            print("empirical directory not found")
+        # only hdf5 input is supported
+        if self.tensor_format != 'hdf5':
             return False
 
-        data_src = None
-        if mode == 'emp':
-            data_src = 'empirical'
-        elif mode == 'sim':
-            data_src = 'test'
-        # check if empirical directory contains files
-        files = ['']
-
-
-        if self.tensor_format == 'hdf5':
-            files = [ f'{self.fmt_dir}/{self.fmt_prefix}.{data_src}.hdf5' ] # {self.optimizer}.{self.scheduler}.{self.phy_hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}
-        # fail if key file missing
-        for fn in files:
-            if not os.path.exists(fn):
-                return False
+        hdf5_fn = self.get_hdf5_fn(mode)
+        if not os.path.exists(hdf5_fn):
+            if mode == 'sim' and self.test_hdf5_fn is not None:
+                util.print_warn(f'test_hdf5 file not found: {hdf5_fn}')
+            return False
         
         return True
     
@@ -500,7 +642,7 @@ class Estimator:
             
         """
         # filesystem
-        path_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
+        path_prefix = self.get_training_prefix()
         train_norm_aux_data_fn = f'{path_prefix}.trn_norm.aux_data.csv'
         train_norm_labels_num_fn = f'{path_prefix}.trn_norm.labels_num.csv'
 
@@ -530,19 +672,19 @@ class Estimator:
 
      
         # filesystem
+        # output filenames in est_dir are still named from the config settings
         path_prefix = ''
         if mode == 'sim':
-            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.test'
-            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.test'
-            training_prefix = f'{self.trn_dir}/{self.trn_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.extra_layers}.{self.n_layers}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
+            path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.model_settings_str()}.test'
 
         if mode == 'emp':
             path_prefix = f'{self.est_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}.empirical'
-            short_path_prefix = f'{self.fmt_dir}/{self.fmt_prefix}.empirical'
-            training_prefix =  f'{self.trn_dir}/{self.est_prefix}.{self.num_classes}.{self.dataset_size}.{self.batch_size}.{self.optimizer}.{self.scheduler}.{self.hidden_size}.{self.graph_conv}.{self.phylo_pool}.{self.learning_rate}.{self.dropout}.{self.activation_func}.{self.regularisation}'
 
+        # trained model and input data (may be in any directory)
+        training_prefix = self.get_training_prefix()
+        hdf5_fn = self.get_hdf5_fn(mode)
 
-        model_arch_fn = f'{training_prefix}.trained_model.pkl'
+        model_arch_fn = f'{training_prefix}{TRAINED_MODEL_SUFFIX}'
         out_est_labels_num_fn = f'{path_prefix}_est.labels_num.csv'
         out_true_labels_num_fn = f'{path_prefix}_true.labels_num.csv'
         out_est_labels_cat_fn = f'{path_prefix}_est.labels_cat.csv'
@@ -550,8 +692,7 @@ class Estimator:
         out_true_aux_fn = f'{path_prefix}_true.aux.csv'
         out_aux_names_fn = f'{path_prefix}_aux_names.csv'
 
-        # simulated test datasets for csv or hdf5
-        hdf5_fn = f'{short_path_prefix}.hdf5'
+        # normalization factors from training
         train_labels_num_norm_fn    = f'{training_prefix}.trn_norm.labels_num.csv'
         train_aux_data_norm_fn       = f'{training_prefix}.trn_norm.aux_data.csv'
         train_attr_data_norm_fn       = f'{training_prefix}.trn_norm.attr_data.csv'
@@ -564,8 +705,18 @@ class Estimator:
 
     
         print("LOADING", model_arch_fn)
+        print("DATA", hdf5_fn)
         # load model
-        self.mymodel = torch.load(model_arch_fn, map_location=self.TORCH_DEVICE, weights_only=False)
+        load_kwargs = dict(map_location=self.TORCH_DEVICE, weights_only=False)
+        if self.trained_network_fn is not None:
+            # build the model with the network code it was trained with,
+            # instead of the current phyddle/network.py
+            if not os.path.exists(self.trained_network_fn):
+                util.print_err(f'trained_network file not found: {self.trained_network_fn}', exit=True)
+            print("NETWORK CODE", self.trained_network_fn)
+            network_module = load_network_module(self.trained_network_fn)
+            load_kwargs['pickle_module'] = make_network_pickle_module(network_module)
+        self.mymodel = torch.load(model_arch_fn, **load_kwargs)
         if self.use_cuda:
             self.mymodel = DataParallel(self.mymodel)
         self.mymodel.to(self.TORCH_DEVICE)
@@ -576,9 +727,27 @@ class Estimator:
             self.label_names = [s.decode() for s in f['label_names'][0,:] ]
             aux_data_names = [ s.decode() for s in f['aux_data_names'][0,:] ]
 
+        # param_est keys must be labels stored in the hdf5 file; names that
+        # differ only by case/underscores (e.g. model_type vs modeltype) match
+        self.resolve_param_est(self.label_names, hdf5_fn)
+
+        with h5py.File(hdf5_fn, "r") as f:
+
             blocks = [np.arange(N)[i:i+self.block_size] for i in range(0,N,self.block_size)]
             self.trainer = train.CnnTrainer(self.args)
             self.estimate_dataset = train.HDF5BlockDataset(hdf5_fn, blocks, self.trainer)
+
+        # train.py's adjust_num_labels expects the six rate columns used in
+        # training (BD birth/death + four BiSSE rates) and condenses them to
+        # four. Test files may store fewer rates (e.g. only log10_birth_rate
+        # and log10_death_rate), so those are kept unchanged. Numerical labels
+        # are only saved to file; they are never passed to the network.
+        dataset_adjust_num_labels = self.estimate_dataset.adjust_num_labels
+        def adjust_num_labels(labels_num):
+            if labels_num.dim() == 2 and labels_num.shape[1] == 6:
+                return dataset_adjust_num_labels(labels_num)
+            return labels_num.to(torch.float32)
+        self.estimate_dataset.adjust_num_labels = adjust_num_labels
 
         # get estimates
         self.total_batches = len(self.estimate_dataset)*(math.ceil(self.block_size / self.trn_batch_size))
@@ -608,6 +777,12 @@ class Estimator:
                     old = g.x
                     g.x = util.normalize(g.x, self.attr_msd).clone().detach().float()
                     g.aux_dat = util.normalize(g.aux_dat, self.aux_msd).float().clone().detach().float()
+                    # labels (e.g. log10_birth_rate, log10_death_rate, modeltype)
+                    # were copied out above for saving only; remove them from
+                    # the graphs so the network cannot use them
+                    for key in ('lbl_num', 'lbl_cat'):
+                        if key in g:
+                            del g[key]
                 try:
                     label_est = self.mymodel(batch)
                     pbar.update(1)
@@ -633,6 +808,16 @@ class Estimator:
                     df_true_labels_cat = pd.DataFrame(lbl_cat.cpu().detach(), columns=self.label_cat_names, dtype='int')
                     df_true_labels_cat = pd.concat( [pd.DataFrame(batch_idx), df_true_labels_cat], axis=1)
                     df_true_labels_cat.to_csv(out_true_labels_cat_fn, header=header, index=False, sep=',', mode=csv_mode)
+                if mode == 'sim' and self.has_label_num:
+                    # true numerical labels (read from hdf5, not used by the network)
+                    true_num = lbl_num.cpu().detach().numpy().reshape(len(batch), -1)
+                    num_cols = self.label_num_names
+                    if true_num.shape[1] != len(num_cols):
+                        num_cols = [ f'label_num_{i}' for i in range(true_num.shape[1]) ]
+                    df_true_labels_num = pd.DataFrame(true_num, columns=num_cols, dtype='float')
+                    df_true_labels_num = pd.concat( [pd.DataFrame(batch_idx), df_true_labels_num], axis=1)
+                    df_true_labels_num.to_csv(out_true_labels_num_fn, header=header, index=False, sep=',',
+                                              float_format=util.PANDAS_FLOAT_FMT_STR, mode=csv_mode)
                 if self.has_aux:
                         df_true_aux = pd.DataFrame(aux_dat.cpu().detach().squeeze(1), dtype='float')
                         df_true_aux = pd.concat( [pd.DataFrame(batch_idx), df_true_aux], axis=1)

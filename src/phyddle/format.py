@@ -14,8 +14,28 @@ License:   MIT
 # Packed-simulation support. Expected layout:
 #     <packed_in_dir>/BD_div/train.nwk, train.txt, test.nwk, test.txt
 #     <packed_in_dir>/BiSSE/ train.nwk, train.txt, test.nwk, test.txt
+# and optionally
+#     <packed_in_dir>/MuSSE_3/ train.nwk, train.txt, test.nwk, test.txt
+#     <packed_in_dir>/MuSSE_4/ train.nwk, train.txt, test.nwk, test.txt
+#     <packed_in_dir>/MuSSE_5/ train.nwk, train.txt, test.nwk, test.txt
 # (.nwk = trees, .txt = parameters). These are unpacked into
 # out.N.tre / out.N.labels.csv / out.N.dat.csv before encoding.
+# model_type labels: BD_div = 0, BiSSE = 1, MuSSE_3 = 2, MuSSE_4 = 3, MuSSE_5 = 4.
+# A model folder is only used if its model_type is in select_classes and the
+# folder exists. num_states must be at least the largest number of states
+# among the selected models (e.g. 5 when MuSSE_5 is selected).
+# Every selected model_type must have a folder, unless single_class = K is
+# set: then only model_type K is unpacked and formatted (e.g. single_class = 1
+# for a BiSSE-only test set) and the other folders may be missing.
+# Set skip_unpack = True to reuse previously unpacked out.N.* files.
+#
+# Graph node encodings (encoding_type): 'NC', '1N', '2N', any other name
+# (R's fallback 3-feature set), or 'all' to format every encoding in one
+# pass with the same trees and the same train/test split.
+# HDF5 output is saved as <fmt_prefix>.<split>.<encoding>.hdf5, or with
+# max_model_states = K as <fmt_prefix>.<split>.<encoding>.statesK.hdf5
+# (e.g. out.train.2N.states3.hdf5); an existing file of that name is first
+# moved to <...>.vN.hdf5.
 """
 # standard imports
 # import copy
@@ -81,10 +101,51 @@ except RuntimeError:
 ##################################################
 
 # subfolder of <packed_in_dir> : model_type (matches labels.csv convention)
+# MuSSE folders are optional: they are only read if their model_type is in
+# select_classes and the folder exists.
 PACKED_MODELS = {
-    'BD_div': 0,
-    'BiSSE':  1,
+    'BD_div':  0,
+    'BiSSE':   1,
+    'MuSSE_3': 2,
+    'MuSSE_4': 3,
+    'MuSSE_5': 4,
 }
+
+# 'MuSSE_5', 'MuSSE5', 'musse_5' ... -> number of states
+_MUSSE_RE = re.compile(r'^musse_?(\d+)$', re.IGNORECASE)
+
+
+def _model_num_states(sub):
+    """Number of character states for a packed model folder (None if unknown)."""
+    if sub == 'BD_div':
+        return 1
+    if sub == 'BiSSE':
+        return 2
+    m = _MUSSE_RE.match(sub)
+    return int(m.group(1)) if m else None
+
+
+def _parse_max_model_states(v):
+    """Config value of max_model_states -> int, or None if not set.
+    None, '', 'none', 'all' or -1 mean 'not set' (use select_classes)."""
+    if v is None or str(v).strip().lower() in ('', 'none', 'na', 'all', '-1'):
+        return None
+    k = int(v)
+    if k < 1:
+        raise ValueError(f'max_model_states must be 1 or more (got {v})')
+    return k
+
+
+def _parse_single_class(v):
+    """Config value of single_class -> int model_type, or None if not set.
+    None, '', 'none', 'na', 'F', 'false' or -1 mean 'not set'."""
+    if v is None or str(v).strip().lower() in ('', 'none', 'na', 'f', 'false', '-1'):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        raise ValueError(f'single_class must be a model_type number, e.g. 1 for '
+                         f'BiSSE (got {v})') from None
 
 # default file names inside each model subfolder
 PACKED_DEFAULT_FILES = {
@@ -93,6 +154,31 @@ PACKED_DEFAULT_FILES = {
     'packed_tre_fn_test':  'test.nwk',
     'packed_par_fn_test':  'test.txt',
 }
+
+##################################################
+# Graph node encodings
+##################################################
+
+# Node features returned by get_node_df() for each encoding.
+# Must match the 'keep' lists in convert-phylo-to-graph.R.
+# encoding_type = 'all' formats every encoding listed here.
+ENCODING_FEATURES = {
+    'NC': ['dist_to_present', 'dist_to_root', 'dist_to_parent', 'leaves'],
+    '1N': ['dist_to_present', 'dist_to_root', 'dist_to_parent', 'leaves',
+           'dist_to_grandparent', 'l_dist', 'r_dist', 'l_leaves', 'r_leaves'],
+    '2N': ['dist_to_present', 'dist_to_root', 'dist_to_parent', 'leaves',
+           'dist_to_grandparent', 'l_dist', 'r_dist', 'l_leaves', 'r_leaves',
+           'dist_to_great_grandparent', 'll_dist', 'lr_dist', 'rl_dist', 'rr_dist',
+           'll_leaves', 'lr_leaves', 'rl_leaves', 'rr_leaves'],
+    'default': ['dist_to_root', 'dist_to_parent', 'desc_ratio'],
+}
+
+
+def _encoding_features(enc):
+    """Feature columns for one encoding (unknown names use R's fallback set)."""
+    return ENCODING_FEATURES.get(enc, ENCODING_FEATURES['default'])
+
+##################################################
 
 # strings treated as a missing tree / value
 _NA_STRINGS = ('', 'na', 'nan', 'null', 'none')
@@ -115,10 +201,10 @@ def _log10(x, floor=1e-12):
     return float(np.log10(max(float(x), floor)))
 
 
-def _tip_states_nhx(newick, key='t_s', offset=1, required=True):
+def _tip_states_nhx(newick, key='t_s', offset=1, required=True, n_states=2):
     """Return {tip_label: state} read from NHX comments on the tips.
 
-    State is (value of key) - offset, so t_s = 1/2 becomes 0/1 by default.
+    State is (value of key) - offset, so t_s = 1..K becomes 0..K-1 by default.
     If required is False, tips without the annotation get state 0.
     """
     key_re = re.compile(rf'{re.escape(key)}=(\d+)')
@@ -132,8 +218,8 @@ def _tip_states_nhx(newick, key='t_s', offset=1, required=True):
             out[label] = 0
             continue
         s = int(k.group(1)) - offset
-        if s not in (0, 1):
-            raise ValueError(f'Tip "{label}": state {s} not in {{0,1}} '
+        if not 0 <= s < max(n_states, 1):
+            raise ValueError(f'Tip "{label}": state {s} not in 0..{n_states - 1} '
                              f'(check packed_state_offset)')
         out[label] = s
     return out
@@ -235,10 +321,15 @@ class Formatter:
         # packed simulations. Layout:
         #   <packed_in_dir>/BD_div/{train,test}.nwk + {train,test}.txt
         #   <packed_in_dir>/BiSSE/ {train,test}.nwk + {train,test}.txt
-        self.packed_in_dir        = str(args['packed_in_dir'])    # parent folder holding BD_div/ and BiSSE/
-        self.packed_par_dir       = str(_arg(args, 'packed_par_dir', ''))  # optional; defaults to packed_in_dir
+        #   optional: <packed_in_dir>/MuSSE_3/, MuSSE_4/, MuSSE_5/ (same files)
+        self.packed_in_dir        = str(args['packed_in_dir'])    # parent folder holding the model folders
+        self.packed_par_dir       = str(_arg(args, 'packed_par_dir', ''))  # optional; only used if parameters are not next to the trees
         self.packed_out_dir       = str(args['packed_out_dir'])   # where unpacked out.N.* files go (e.g. 'simulate')
-        self.packed_models        = dict(_arg(args, 'packed_models', PACKED_MODELS))
+        # all known models, plus / overridden by packed_models from the config.
+        # (Merged rather than replaced: a packed_models default of only BD_div
+        # and BiSSE would otherwise silently drop the MuSSE models.)
+        self.packed_models        = dict(PACKED_MODELS)
+        self.packed_models.update(dict(_arg(args, 'packed_models', {}) or {}))
         self.packed_state_key     = str(_arg(args, 'packed_state_key', 't_s'))
         self.packed_state_offset  = int(_arg(args, 'packed_state_offset', 1))
 
@@ -252,11 +343,68 @@ class Formatter:
         # fixed train/test split taken from the train/test files
         self.fixed_split          = bool(args['fixed_split'])
         self.packed_split         = {}                                # {'train': [NUM...], 'test': [NUM...]}
-        self.encoding_type = str(args['encoding_type'])
 
-        # features of interest 
-        self.aux_data = ["log10_tree_length","log10_root_age","log10_brlen_mean","log10_age_mean","log10_B1","colless","age_var","brlen_var","treeness","N_bar","f_dat_0","n_dat_0","f_dat_1","n_dat_1","num_taxa","prop_taxa"]
-        self.num_attr = 3
+        # True = use the out.N.* files already in packed_out_dir and skip unpacking
+        self.skip_unpack          = bool(_arg(args, 'skip_unpack', False))
+
+        # True = always unpack again, even if the packed files look already unpacked
+        self.force_unpack         = str(_arg(args, 'force_unpack', False)).strip().upper() in ('T', 'TRUE', '1', 'YES')
+
+        # max_model_states = K: use every model with at most K character states
+        # (BD = 1, BiSSE = 2, MuSSE_3..5 = 3..5) and ignore the rest, e.g.
+        # K = 3 -> BD, BiSSE and MuSSE_3. This replaces select_classes, and
+        # num_states is raised to K if it is smaller.
+        self.max_model_states = _parse_max_model_states(_arg(args, 'max_model_states', None))
+        if self.max_model_states is not None:
+            k = self.max_model_states
+            self.select_classes = sorted(
+                mt for sub, mt in self.packed_models.items()
+                if _model_num_states(sub) is not None and _model_num_states(sub) <= k)
+            used = [sub for sub, mt in self.packed_models.items() if mt in self.select_classes]
+            util.print_str(f'▪ max_model_states = {k}: using {", ".join(used)} '
+                           f'(model_type {self.select_classes})', self.verbose)
+            if self.num_states < k:
+                util.print_str(f'▪ num_states raised from {self.num_states} to {k}',
+                               self.verbose)
+                self.num_states = k
+            elif self.num_states > k:
+                util.print_warn(f'num_states = {self.num_states} is larger than '
+                                f'max_model_states = {k}; states {k}..{self.num_states - 1} '
+                                f'will always be empty')
+
+        # single_class = <model_type>: unpack and format one model class only,
+        # e.g. single_class = 1 for a test set that holds only BiSSE trees.
+        # Only the folder of that class is required; the other selected
+        # classes may be missing. select_classes is left unchanged, so the
+        # model_type labels mean the same as in a full run.
+        # Not set (default) = every selected model_type must have a folder.
+        self.single_class = _parse_single_class(_arg(args, 'single_class', None))
+        if self.single_class is not None:
+            if self.single_class not in self.select_classes:
+                raise ValueError(f'single_class = {self.single_class} is not among the '
+                                 f'selected model_types {self.select_classes}')
+            names = [sub for sub, mt in self.packed_models.items() if mt == self.single_class]
+            util.print_str(f'▪ single_class = {self.single_class}: converting '
+                           f'{", ".join(names)} only (model_type {self.single_class})',
+                           self.verbose)
+
+        # graph node encoding(s)
+        # 'all' formats every encoding in one pass (same trees, same split)
+        self.encoding_type = str(args['encoding_type'])
+        if self.encoding_type == 'all':
+            self.encodings = list(ENCODING_FEATURES)
+        else:
+            self.encodings = [self.encoding_type]
+        # number of node features per encoding: {encoding: num_attr}
+        self.num_attr = {e: len(_encoding_features(e)) for e in self.encodings}
+
+        # features of interest (one f_dat_i / n_dat_i pair per character state,
+        # in the same order make_summ_stat() creates them)
+        self.aux_data = (["log10_tree_length", "log10_root_age", "log10_brlen_mean",
+                          "log10_age_mean", "log10_B1", "colless", "age_var",
+                          "brlen_var", "treeness", "N_bar"] +
+                         [f'{p}_dat_{i}' for i in range(self.num_states) for p in ('f', 'n')] +
+                         ["num_taxa", "prop_taxa"])
         self.block_size = int(args['block_size'])
 
         # set number of processors
@@ -289,24 +437,99 @@ class Formatter:
         return
 
     ##########################################################
+    # HDF5 file naming / versioning
+    ##########################################################
+
+    def _find_hdf5_fn(self, data_str, enc=None):
+        """Path of an existing HDF5 file for one split and encoding.
+
+        Tries, in order:
+          <fmt_prefix>.<data_str>.<encoding>.states<K>.hdf5   (K = max_model_states)
+          the same with a larger K (K+1..5; a superset of the models)
+          <fmt_prefix>.<data_str>.<encoding>.hdf5             (no states tag)
+          <fmt_prefix>.<data_str>.hdf5                         (no encoding)
+        Without max_model_states only the last two are tried.
+        Raises FileNotFoundError if none exists.
+        """
+        tried = [self._hdf5_fn(data_str, enc)]
+        if self.max_model_states is not None:
+            tried += [self._hdf5_fn(data_str, enc, k)
+                      for k in range(self.max_model_states + 1, 6)]
+            tried.append(self._hdf5_fn(data_str, enc, states=False))
+        tried.append(f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.hdf5')
+        tried = list(dict.fromkeys(tried))
+
+        for i, fn in enumerate(tried):
+            if os.path.exists(fn):
+                if i > 0:
+                    util.print_str(f'▪ {os.path.basename(tried[0])} not found; using '
+                                   f'{os.path.basename(fn)}', self.verbose)
+                return fn
+
+        raise FileNotFoundError(f'No HDF5 file for {data_str}. Tried: '
+                                + ', '.join(tried))
+
+    def _hdf5_fn(self, data_str, enc=None, states=None):
+        """Path of the HDF5 file for one split and encoding,
+        e.g. <fmt_dir>/<fmt_prefix>.train.2N.hdf5, or with max_model_states = 3
+        <fmt_dir>/<fmt_prefix>.train.2N.states3.hdf5.
+
+        states: None = use max_model_states (no tag if it is not set),
+                False = no tag, an int = that tag.
+        """
+        enc = self.encodings[0] if enc is None else enc
+        enc = re.sub(r'[^A-Za-z0-9_\-]+', '_', enc)  # filename-safe
+        if states is None:
+            states = self.max_model_states
+        tag = f'.states{int(states)}' if states not in (None, False) else ''
+        return f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.{enc}{tag}.hdf5'
+
+    def _archive_existing_hdf5(self, fn):
+        """If fn exists, rename it to the next free version,
+        e.g. out.train.2N.hdf5 -> out.train.2N.v3.hdf5 when v1 and v2
+        already exist. Returns the archived path, or None if nothing was moved."""
+        if not os.path.exists(fn):
+            return None
+        out_dir = os.path.dirname(fn) or '.'
+        base = os.path.basename(fn)[:-len('.hdf5')]
+        ver_re = re.compile(rf'^{re.escape(base)}\.v(\d+)\.hdf5$')
+        versions = []
+        for f in os.listdir(out_dir):
+            m = ver_re.match(f)
+            if m:
+                versions.append(int(m.group(1)))
+        new_v = max(versions, default=0) + 1
+        archived = os.path.join(out_dir, f'{base}.v{new_v}.hdf5')
+        os.rename(fn, archived)
+        util.print_str(f'▪ Existing {os.path.basename(fn)} moved to '
+                       f'{os.path.basename(archived)}', self.verbose)
+        return archived
+
+    ##########################################################
     # Packed-simulation unpacking
     ##########################################################
 
     def _find_packed_files(self, sub, tre_fn, par_fn):
         """Return (trees_path, params_path) for one packed model (e.g. 'BD_div').
 
-        Trees:      <packed_in_dir>/<sub>/<tre_fn>          (e.g. BiSSE/train.nwk)
-        Parameters: <packed_par_dir>/<sub>/<par_fn>          (e.g. BiSSE/train.txt)
+        Trees:      <packed_in_dir>/<sub>/<tre_fn>           (e.g. BiSSE/train.nwk)
+        Parameters: <packed_in_dir>/<sub>/<par_fn>           (e.g. BiSSE/train.txt)
+                    else <packed_par_dir>/<sub>/<par_fn>
                     else <packed_par_dir>/<par_fn>
-        If packed_par_dir is empty it defaults to packed_in_dir, so by default
-        trees and parameters sit side by side in the same model folder.
+        The folder holding the trees is always searched first, so
+        packed_par_dir only matters if parameters live somewhere else.
         """
         tre_path = os.path.join(self.packed_in_dir, sub, tre_fn)
         if not os.path.exists(tre_path):
             raise FileNotFoundError(f'Cannot find trees file for {sub}: {tre_path}')
 
-        par_root = self.packed_par_dir or self.packed_in_dir
-        tried = [os.path.join(par_root, sub, par_fn), os.path.join(par_root, par_fn)]
+        # first look next to the trees (e.g. BD_div/train.txt beside BD_div/train.nwk),
+        # then in packed_par_dir if one is set
+        tried = [os.path.join(os.path.dirname(tre_path), par_fn)]
+        if self.packed_par_dir:
+            tried += [os.path.join(self.packed_par_dir, sub, par_fn),
+                      os.path.join(self.packed_par_dir, par_fn)]
+        tried = list(dict.fromkeys(tried))   # drop duplicates, keep order
         par_path = next((p for p in tried if os.path.exists(p)), None)
         if par_path is None:
             raise FileNotFoundError(f'Cannot find parameters file for {sub}. Tried: '
@@ -323,18 +546,74 @@ class Formatter:
         # BiSSE columns: index, lambda1, lambda2, turnover, sampling_frac,
         #   tree_size, mu1, mu2, net_rate1, net_rate2, q01, q10,
         #   lambda2_ratio, q01_ratio
+        # q01 always equals q10 in these simulations, so the shared rate is
+        # also written as log10_trans_rate / trans_rate (same names as MuSSE)
+        q01, q10 = float(row['q01']), float(row['q10'])
+        if not np.isclose(q01, q10, rtol=1e-6, atol=0.0):
+            raise ValueError(f'BiSSE row index {row.get("index", "?")}: q01 = {q01} '
+                             f'and q10 = {q10} differ, but a single shared '
+                             f'transition rate is expected')
         return {'log10_birth_rate_t1': _log10(row['lambda1']),
                 'log10_birth_rate_t2': _log10(row['lambda2']),
                 'log10_death_rate_t1': _log10(row['mu1']),
                 'log10_death_rate_t2': _log10(row['mu2']),
-                'log10_trans_01':      _log10(row['q01']),
-                'log10_trans_10':      _log10(row['q10']),
-                'trans_10':            float(row['q10'])}   # raw, as in old header
+                'log10_trans_rate':    _log10(q01),
+                'trans_rate':          q01,
+                'log10_trans_01':      _log10(q01),          # kept for older configs
+                'log10_trans_10':      _log10(q10),
+                'trans_10':            q10}                  # raw, as in old header
 
-    def _write_dat_csv(self, path, tree_str, model_type):
+    def _labels_musse(self, row, n_states):
+        # MuSSE_K columns (K = 3, 4 or 5):
+        #   index, n_states, lambda1..lambdaK, mu1..muK, net_rate1..K,
+        #   turnover1..K, q, sampling_frac, tree_size, lambda_ratio2..K,
+        #   q_ratio_lambda1, q_ratio_mean
+        # q is one transition rate shared by all state pairs.
+        # Labels:
+        #   lambdaI -> log10_birth_rate_tI, muI -> log10_death_rate_tI,
+        #   q -> log10_trans_rate (and raw trans_rate)
+        # Per-pair columns (q12, q1_2, ...) are also read if a file has them,
+        # giving log10_trans_12 etc.
+        if 'n_states' in row.index and str(row['n_states']).strip().lower() not in _NA_STRINGS:
+            n_file = int(float(row['n_states']))
+            if n_file != n_states:
+                raise ValueError(f'Parameter row index {row.get("index", "?")} has '
+                                 f'n_states = {n_file} but the folder is MuSSE_{n_states}')
+
+        lbl = {}
+        for i in range(1, n_states + 1):
+            lbl[f'log10_birth_rate_t{i}'] = _log10(row[f'lambda{i}'])   # KeyError if missing
+        for i in range(1, n_states + 1):
+            lbl[f'log10_death_rate_t{i}'] = _log10(row[f'mu{i}'])
+
+        if 'q' in row.index:
+            lbl['log10_trans_rate'] = _log10(row['q'])
+            lbl['trans_rate'] = float(row['q'])                         # raw, like BiSSE trans_10
+
+        for name in row.index:
+            m = re.match(r'^q[._]?(\d)[._]?(\d)$', name)
+            if m and str(row[name]).strip().lower() not in _NA_STRINGS:
+                lbl[f'log10_trans_{m.group(1)}{m.group(2)}'] = _log10(row[name])
+
+        if 'log10_trans_rate' not in lbl and not any(k.startswith('log10_trans_') for k in lbl):
+            raise KeyError('q')
+        return lbl
+
+    def _label_maker(self, sub):
+        """Label function for a packed model folder, or None if unknown."""
+        if sub == 'BD_div':
+            return self._labels_bd
+        if sub == 'BiSSE':
+            return self._labels_bisse
+        if _MUSSE_RE.match(sub):
+            k = _model_num_states(sub)
+            return lambda row: self._labels_musse(row, k)
+        return None
+
+    def _write_dat_csv(self, path, tree_str, model_type, n_states=2):
         """Write 'taxa,data' csv of extant-tip states for one tree.
 
-        data = (NHX t_s value) - packed_state_offset, so t_s 1/2 -> 0/1.
+        data = (NHX t_s value) - packed_state_offset, so t_s 1..K -> 0..K-1.
         Only extant tips are written. BD trees without t_s get data = 0.
         """
         clean = _COMMENT_RE.sub('', tree_str)
@@ -342,7 +621,8 @@ class Formatter:
         states = _tip_states_nhx(tree_str,
                                  key=self.packed_state_key,
                                  offset=self.packed_state_offset,
-                                 required=(model_type != 0))
+                                 required=(model_type != 0),
+                                 n_states=n_states)
         with open(path, 'w') as f:
             f.write('taxa,data\n')
             for label in extant:
@@ -415,12 +695,38 @@ class Formatter:
         self.packed_split = {s: [int(x) for x in m.loc[m['split'] == s, 'num']]
                              for s in ['train', 'test']}
 
+    def _use_existing_unpacked(self):
+        """skip_unpack = True: reuse out.N.* files already in packed_out_dir.
+
+        Does not read the .nwk/.txt files. The fixed train/test split is
+        reloaded from <packed_out_dir>/split_index_map.csv.
+        """
+        out_dir = self.packed_out_dir
+        map_fn = os.path.join(out_dir, 'split_index_map.csv')
+        if not os.path.isdir(out_dir):
+            raise FileNotFoundError(f'skip_unpack is True but {out_dir} does not exist. '
+                                    f'Run once with skip_unpack = False to unpack.')
+        if os.path.exists(map_fn):
+            self._load_split_map(map_fn)
+        elif self.fixed_split:
+            raise RuntimeError(f'skip_unpack and fixed_split are True but {map_fn} '
+                               f'is missing, so the train/test split is unknown. '
+                               f'Run once with skip_unpack = False.')
+        self.sim_dir = out_dir   # rest of Format reads from here
+        util.print_str(f'▪ Skipping unpacking; using existing files in {out_dir}',
+                       self.verbose)
+        return True
+
     def unpack_packed_sims(self):
         """Split packed tree/parameter files into per-replicate files.
 
         Expected layout:
             <packed_in_dir>/BD_div/train.nwk, train.txt, test.nwk, test.txt
             <packed_in_dir>/BiSSE/ train.nwk, train.txt, test.nwk, test.txt
+        and optionally
+            <packed_in_dir>/MuSSE_3/, MuSSE_4/, MuSSE_5/ (same file names)
+
+        A model folder is used only if its model_type is in select_classes.
 
         Trees (.nwk) and parameters (.txt) are matched by their 'index'
         column when both files have one; otherwise they are matched by row
@@ -433,8 +739,15 @@ class Formatter:
         files; if False they are pooled and split_examples() splits randomly.
         The N values for each split are saved in
         <packed_out_dir>/split_index_map.csv (num, model, split, orig_index).
+
+        If skip_unpack is True, nothing is unpacked and the existing files in
+        packed_out_dir are used as they are.
         Returns True if packed data was used.
         """
+        # reuse previously unpacked files without touching the packed inputs
+        if self.skip_unpack:
+            return self._use_existing_unpacked()
+
         root = self.packed_in_dir
         if not os.path.isdir(root):
             # no packed data: fall back to ordinary out.N.* files in sim_dir
@@ -447,22 +760,57 @@ class Formatter:
         map_fn = os.path.join(out_dir, 'split_index_map.csv')
         sentinel = os.path.join(out_dir, '.unpacked')
 
-        makers = {'BD_div': self._labels_bd, 'BiSSE': self._labels_bisse}
+        # label function per model name (None = unknown model)
+        makers = {sub: self._label_maker(sub) for sub in self.packed_models}
 
-        # list of (model folder, model_type, split name, trees path, params path)
-        jobs = []
+        # model folders present, matched ignoring case, '_' and '-'
+        # (MuSSE_3 matches MuSSE3, musse_3, MUSSE-3, ...)
+        def norm_name(x):
+            return re.sub(r'[^a-z0-9]', '', x.lower())
+        present = {norm_name(f): f for f in os.listdir(root)
+                   if os.path.isdir(os.path.join(root, f))}
+
+        # one folder per selected model_type; a selected model without a
+        # folder is an error, so a K-state run never silently drops a model.
+        # With single_class set, only that model_type is required and used.
+        wanted = ([self.single_class] if self.single_class is not None
+                  else list(self.select_classes))
+        chosen = {}                 # model_type -> (model name, folder)
         for sub, model_type in self.packed_models.items():
-            if model_type not in self.select_classes:
+            if model_type not in wanted or model_type in chosen:
                 continue
-            sub_dir = os.path.join(root, sub)
-            if sub not in makers or not os.path.isdir(sub_dir):
-                util.print_warn(f'Skipping packed model folder {sub_dir}')
+            if makers.get(sub) is None:
                 continue
+            folder = present.get(norm_name(sub))
+            if folder is not None:
+                chosen[model_type] = (sub, folder)
+        missing = [mt for mt in wanted if mt not in chosen]
+        if missing:
+            names = {mt: [s for s, m in self.packed_models.items() if m == mt] for mt in missing}
+            hint = ('' if self.single_class is not None or len(chosen) == 0 else
+                    f'. To convert only the classes that are present, set '
+                    f'single_class (e.g. single_class = {min(chosen)})')
+            raise FileNotFoundError(
+                f'No packed folder in {root} for selected model_type(s) '
+                + ', '.join(f'{mt} (expected one of {names[mt]})' for mt in missing)
+                + f'. Folders present: {sorted(present.values())}' + hint)
+        util.print_str('▪ Model folders: ' + ', '.join(
+            f'{sub} = {folder}/ (model_type {mt})' for mt, (sub, folder) in sorted(chosen.items())),
+            self.verbose)
+
+        # list of (model name, model_type, split name, trees path, params path)
+        jobs = []
+        for model_type, (sub, folder) in sorted(chosen.items()):
+            n_st = _model_num_states(sub)
+            if n_st is not None and n_st > self.num_states:
+                raise ValueError(f'{sub} has {n_st} character states but num_states '
+                                 f'= {self.num_states} in the config. Set num_states '
+                                 f'to at least {n_st}.')
             for split, tfn, pfn in [('train', self.packed_tre_fn_train, self.packed_par_fn_train),
                                     ('test',  self.packed_tre_fn_test,  self.packed_par_fn_test)]:
                 if not tfn or not pfn:      # this set not provided
                     continue
-                tre_path, par_path = self._find_packed_files(sub, tfn, pfn)
+                tre_path, par_path = self._find_packed_files(folder, tfn, pfn)
                 jobs.append((sub, model_type, split, tre_path, par_path))
 
         if not jobs:
@@ -474,18 +822,33 @@ class Formatter:
         # class selection and split mode)
         sel_key = '|'.join(
             ['classes=' + ','.join(str(c) for c in sorted(self.select_classes)),
+             f'single={self.single_class}',
              f'fixed={int(self.fixed_split)}'] +
             [f'{s}:{sp}:{os.path.abspath(t)}:{os.path.getmtime(t):.0f}:'
              f'{os.path.abspath(p)}:{os.path.getmtime(p):.0f}'
              for s, _, sp, t, p in jobs])
-        if os.path.exists(sentinel) and os.path.exists(map_fn):
+        if self.force_unpack:
+            util.print_str('▪ force_unpack is set; unpacking again', self.verbose)
+        elif os.path.exists(sentinel) and os.path.exists(map_fn):
             with open(sentinel) as f:
-                if f.read().strip() == sel_key:
+                same_inputs = f.read().strip() == sel_key
+            if same_inputs:
+                # the inputs match; also check every unpacked tree is still there
+                m = pd.read_csv(map_fn)
+                missing = [int(n) for n in m['num']
+                           if not all(os.path.exists(f'{out_dir}/{self.sim_prefix}.{int(n)}.{ext}')
+                                      for ext in ('tre', 'labels.csv', 'dat.csv'))]
+                if not missing:
                     self._load_split_map(map_fn)
                     self.sim_dir = out_dir   # rest of Format reads from here
+                    counts = m.groupby(['model', 'split']).size()
                     util.print_str('▪ Packed simulations already unpacked; reusing '
-                                   f'files in {out_dir}', self.verbose)
+                                   f'{len(m)} trees in {out_dir}: ' +
+                                   ', '.join(f'{mod} {sp} {c}' for (mod, sp), c in counts.items()),
+                                   self.verbose)
                     return True
+                util.print_warn(f'{len(missing)} of {len(m)} unpacked trees are missing from '
+                                f'{out_dir}; unpacking again')
 
         # remove out.N.* files left by a previous unpack (only if that unpack
         # wrote a split map here, so user files are never touched)
@@ -505,6 +868,7 @@ class Formatter:
             tree_rows = self._read_tree_table(tre_path)
             params = self._read_param_table(par_path)
             label = f'{sub} ({split})'
+            n_states_sub = _model_num_states(sub) or self.num_states
 
             has_idx_col = 'index' in params.columns
             keyed = len(tree_rows) > 0 and all(k is not None for k, _ in tree_rows)
@@ -543,7 +907,8 @@ class Formatter:
                 with open(base + '.tre', 'w') as f:
                     f.write(_COMMENT_RE.sub('', tree_str) + '\n')
                 pd.DataFrame([lbl]).to_csv(base + '.labels.csv', index=False)
-                self._write_dat_csv(base + '.dat.csv', tree_str, model_type)
+                self._write_dat_csv(base + '.dat.csv', tree_str, model_type,
+                                    n_states=n_states_sub)
 
                 orig_index = row['index'] if has_idx_col else i + 1
                 split_nums[split].append(n)
@@ -575,7 +940,8 @@ class Formatter:
         
         verbose = self.verbose
 
-        # convert packed BD_div/, BiSSE/ train/test files into per-replicate files
+        # convert packed model-folder train/test files into per-replicate files
+        # (or reuse existing ones if skip_unpack is True)
         if not self.no_sim:
             self.unpack_packed_sims()
 
@@ -615,6 +981,8 @@ class Formatter:
                 self.create_hdf5('train')
             
             strings = ["train", "test"]
+            print("encoding: ", self.encoding_type, "->", ", ".join(self.encodings))
+
             for string in strings:
                
                 rep_idx = self.split_idx[string]
@@ -764,7 +1132,6 @@ class Formatter:
         """
 
         # construct list of encoding arguments
-        print("encoding: ", self.encoding_type)
         assert mode in ['sim', 'emp']
         encode_path = ''
         if mode == 'sim':
@@ -816,6 +1183,7 @@ class Formatter:
         for i in res:
             if i is not None:
                 # Get graph information, such as node attributes and number of edges and nodes, with the phylogeny and label.
+                # node_attr is a dict {encoding: DataFrame of node features}
                 self.rep_data[i[0]] = { 'phy':i[1].flatten(),
                                         'node_1':i[3],
                                         'node_2':i[4],
@@ -825,9 +1193,10 @@ class Formatter:
                                         'aux': i[7],
                                         'lbl': i[8]}
                 # Check for a bug in obtaining individual graphs from all results.
-                if i[6] != i[2].shape[0]:
+                n_rows = {e: a.shape[0] for e, a in i[2].items()}
+                if any(n != i[6] for n in n_rows.values()):
                     print(i[6])
-                    print(i[2].shape)
+                    print(n_rows)
                     print("MISSMATCH!")
                     quit()
         return 
@@ -943,159 +1312,108 @@ class Formatter:
         
     
     def create_hdf5(self, data_str):
-        """ Initialise HDF5 file with maximum space required"""
+        """Initialise one empty HDF5 file per encoding for this split.
+
+        Files are named <fmt_prefix>.<data_str>.<encoding>.hdf5. An existing
+        file of that name is first moved to <...>.<encoding>.vN.hdf5.
+        """
         assert data_str in ['test', 'train', 'empirical']
-        rep_idx               = self.split_idx[data_str]
-        aux_data_names        =  np.array(self.aux_data)#first_aux_data_values.columns.to_list()
-        par_est_names         =  np.array(self.param_est) #first_par_est_values.columns.to_list()
-        # dimensions
-        num_samples           = len(rep_idx)
-        tree_width            = self.tree_width
-        num_data_length       = tree_width * self.num_data_col
-        num_aux_data          = len(aux_data_names)
-        num_par_est           = len(par_est_names)
-         # print info
-        print(f'Making {data_str} hdf5 dataset: {num_samples} examples for tree width = {tree_width}')
+        rep_idx         = self.split_idx[data_str]
+        aux_data_names  = np.array(self.aux_data)
+        par_est_names   = np.array(self.param_est)
+        num_samples     = len(rep_idx)
+        tree_width      = self.tree_width
+        num_data_length = tree_width * self.num_data_col
+        num_aux_data    = len(aux_data_names)
+        num_par_est     = len(par_est_names)
 
-        # HDF5 file
-        out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.new.hdf5' #remove new!
+        for enc in self.encodings:
+            num_attr = self.num_attr[enc]
+            print(f'Making {data_str} hdf5 dataset ({enc}, {num_attr} node features): '
+                  f'{num_samples} examples for tree width = {tree_width}')
 
-        with h5py.File(out_hdf5_fn, 'w') as hdf5_file:
+            out_hdf5_fn = self._hdf5_fn(data_str, enc)
+            self._archive_existing_hdf5(out_hdf5_fn)
 
-           # Create HDF5 dataset. Code to work with variable length arrays is based on examples from Stack Overflow.
-            hdf5_file.create_dataset('idx', (0, 1),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,1))            
-            hdf5_file.create_dataset('aux_data_names', (1, num_aux_data),
-                                'S64', aux_data_names.astype('S64'), compression='gzip')
-            hdf5_file.create_dataset('label_names',(1, num_par_est),
-                                'S64', par_est_names.astype('S64'), compression='gzip')
+            with h5py.File(out_hdf5_fn, 'w') as hdf5_file:
+                # fixed name arrays
+                hdf5_file.create_dataset('aux_data_names', (1, num_aux_data),
+                                         'S64', aux_data_names.astype('S64'), compression='gzip')
+                hdf5_file.create_dataset('label_names', (1, num_par_est),
+                                         'S64', par_est_names.astype('S64'), compression='gzip')
+                node_attr_names = np.array(_encoding_features(enc))
+                hdf5_file.create_dataset('node_attr_names', (1, num_attr),
+                                         'S64', node_attr_names.astype('S64'), compression='gzip')
 
-            # Each entry is a dictionary of phylo-state, aux, data, and label
-            dat_phy = hdf5_file.create_dataset('phy_data',
-                                        (0, num_data_length),
-                                        dtype='f', compression='gzip', chunks=True, maxshape=(None,num_data_length))
-            dat_aux = hdf5_file.create_dataset('aux_data',
-                                            (0, num_aux_data),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,num_aux_data))
-            dat_lbl = hdf5_file.create_dataset('labels',
-                                            (0, num_par_est),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,num_par_est))
-            dat_num_edges = hdf5_file.create_dataset('num_edges',
-                                            (0, 1),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,1))
-            dat_num_nodes = hdf5_file.create_dataset('num_nodes',
-                                            (0, 1),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,1))
-            dat_node_1 = hdf5_file.create_dataset('node_1',
-                                            (0, ),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,))
-            dat_node_2 = hdf5_file.create_dataset('node_2',
-                                            (0, ),
-                                            dtype='f', compression='gzip', chunks=True, maxshape=(None,))
-            dat_node_attr = hdf5_file.create_dataset('node_attr', 
-                        shape=(0, self.num_attr),  dtype='f', compression='gzip', chunks=True, maxshape=(None,self.num_attr))
-            dat_graph_id = hdf5_file.create_dataset('graph_id', 
-                    shape=(0,),  dtype='f', compression='gzip', chunks=True, maxshape=(None,))
-            
-            # new_dat = np.array(range(len(rep_idx)))
-            # hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
-            # hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat        
+                # growable arrays, appended to by write_tensor_hdf5().
+                # Code to work with variable length arrays is based on examples from Stack Overflow.
+                def growable(name, width=None):
+                    shape    = (0,) if width is None else (0, width)
+                    maxshape = (None,) if width is None else (None, width)
+                    hdf5_file.create_dataset(name, shape, dtype='f', compression='gzip',
+                                             chunks=True, maxshape=maxshape)
 
-            return
+                growable('idx', 1)
+                growable('phy_data', num_data_length)
+                growable('aux_data', num_aux_data)
+                growable('labels', num_par_est)
+                growable('num_edges', 1)
+                growable('num_nodes', 1)
+                growable('node_1')
+                growable('node_2')
+                growable('node_attr', num_attr)
+                growable('graph_id')
+        return
 
 
     def write_tensor_hdf5(self, data_str, min_ind, max_ind):
-        """Writes formatted tensors to HDF5 file.
+        """Writes formatted tensors to HDF5 file(s).
 
-        This function reads in all formatted input data the test or train
-        datasets. Each input data point includes the phylogenetic state
-        vector, the summary statistic vector, and the training label vector.
-        Known parameters and summary statistics are converted into the
-        auxiliary data vector. All data are then compiled into a tensor and
-        stored into a new hdf5 object that is gzip-compressed, then written
-        to file.
+        Appends the current block of encoded examples to the HDF5 file of each
+        encoding. Each input data point includes the phylogenetic state
+        vector, the graph (edges and node features), the auxiliary data
+        vector and the training label vector. Everything except node_attr is
+        the same across encodings, so it is built once and written to every
+        file.
 
         Args:
-            data_str (str): specifies 'test' or 'train' dataset
-        
+            data_str (str): specifies 'test', 'train' or 'empirical' dataset
         """
 
         assert data_str in ['test', 'train', 'empirical']
-        
-        # analysis info
-        if data_str in ['test', 'train']:
-            rep_idx               = self.split_idx[data_str]
-        else:
-            rep_idx = self.rep_idx
 
-        # # HDF5 file
-        out_hdf5_fn = f'{self.fmt_dir}/{self.fmt_prefix}.{data_str}.new.hdf5' #remove new!
+        res = list(self.rep_data.values())
+        if len(res) == 0:
+            return
 
-        with h5py.File(out_hdf5_fn, 'a') as hdf5_file:
-            res = list(self.rep_data.values())
+        # This code for appending data is based on https://stackoverflow.com/questions/47072859/how-to-append-data-to-one-specific-dataset-in-a-hdf5-file-with-h5py
+        shared = {
+            'phy_data':  np.vstack([x['phy'] for x in res]),
+            'labels':    np.vstack([x['lbl'] for x in res]),
+            'aux_data':  np.vstack([x['aux'] for x in res]),
+            'idx':       np.vstack([k for k in self.rep_data.keys()]),
+            'node_1':    np.concatenate([np.array(x['node_1']) for x in res], axis=None),
+            'node_2':    np.concatenate([np.array(x['node_2']) for x in res], axis=None),
+            'num_edges': np.vstack([x['num_edges'] for x in res]),
+            'num_nodes': np.vstack([x['num_nodes'] for x in res]),
+            'graph_id':  np.arange(len(res)),
+        }
 
-
-        
-         # store all numerical data into hdf5)
-            if len(res) > 0:
-                # NOTE: graphs have different numbers of nodes, so node_attr
-                # cannot be flattened across all graphs and reshaped with a
-                # single global order='F' (that assumes one uniform matrix and
-                # scrambles feature columns across graph boundaries). Stack
-                # each graph's own (num_nodes_i, num_attr) block instead.
-                node_attr_cat = np.vstack([
-                    np.asarray(x['node_attr'], dtype=np.float64).reshape(-1, self.num_attr)
-                    for x in res
-                ])
-                node_1_cat = np.concatenate( [ np.array(x['node_1']) for x in res ], axis=None ) #node_1_list
-                node_2_cat = np.concatenate( [ np.array(x['node_2']) for x in res ], axis=None ) # node_2_list
-                
-                # This code for appending data is based on https://stackoverflow.com/questions/47072859/how-to-append-data-to-one-specific-dataset-in-a-hdf5-file-with-h5py
-                new_dat = np.vstack( [ x['phy'] for x in res ] )
-                hdf5_file['phy_data'].resize((hdf5_file['phy_data'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['phy_data'][-new_dat.shape[0]:] = new_dat
-
-                new_dat = np.vstack( [ x['lbl'] for x in res ] )
-                hdf5_file['labels'].resize((hdf5_file['labels'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['labels'][-new_dat.shape[0]:] = new_dat   
-
-                new_dat = np.vstack( [ x['aux'] for x in res ] )
-                #print("aux dat new dat", new_dat)
-                hdf5_file['aux_data'].resize((hdf5_file['aux_data'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['aux_data'][-new_dat.shape[0]:] = new_dat  
-
-
-                new_dat = np.vstack( [ k for k,v in list(self.rep_data.items()) if v is not None] )
-                hdf5_file['idx'].resize((hdf5_file['idx'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['idx'][-new_dat.shape[0]:] = new_dat  
-
-                new_dat = node_attr_cat
-                hdf5_file['node_attr'].resize((hdf5_file['node_attr'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['node_attr'][-new_dat.shape[0]:] = new_dat
-
-                new_dat = node_1_cat
-                hdf5_file['node_1'].resize((hdf5_file['node_1'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['node_1'][-new_dat.shape[0]:] = new_dat       
-
-                new_dat = node_2_cat
-                hdf5_file['node_2'].resize((hdf5_file['node_2'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['node_2'][-new_dat.shape[0]:] = new_dat       
-
-
-       
-
-                new_dat = np.vstack( [ x['num_edges'] for x in res ] )
-                hdf5_file['num_edges'].resize((hdf5_file['num_edges'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['num_edges'][-new_dat.shape[0]:] = new_dat     
-
-                new_dat = np.vstack( [ x['num_nodes'] for x in res ] )
-                hdf5_file['num_nodes'].resize((hdf5_file['num_nodes'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['num_nodes'][-new_dat.shape[0]:] = new_dat    
-
-                new_dat = np.array(range(len([x for x in res if x is not None])))
-                hdf5_file['graph_id'].resize((hdf5_file['graph_id'].shape[0] + new_dat.shape[0]), axis=0)
-                hdf5_file['graph_id'][-new_dat.shape[0]:] = new_dat      
-
+        for enc in self.encodings:
+            # NOTE: graphs have different numbers of nodes, so node_attr
+            # cannot be flattened across all graphs and reshaped with a
+            # single global order='F' (that assumes one uniform matrix and
+            # scrambles feature columns across graph boundaries). Stack
+            # each graph's own (num_nodes_i, num_attr) block instead.
+            node_attr_cat = np.vstack([
+                np.asarray(x['node_attr'][enc], dtype=np.float64).reshape(-1, self.num_attr[enc])
+                for x in res
+            ])
+            with h5py.File(self._hdf5_fn(data_str, enc), 'a') as hdf5_file:
+                for name, new_dat in list(shared.items()) + [('node_attr', node_attr_cat)]:
+                    ds = hdf5_file[name]
+                    ds.resize(ds.shape[0] + new_dat.shape[0], axis=0)
+                    ds[-new_dat.shape[0]:] = new_dat
         return
     
     def write_tensor_csv(self, data_str):
@@ -1324,7 +1642,10 @@ class Formatter:
 
         phy_str = phy.as_string(schema="newick")
         global offset
-        graph_data_base = gen_graph(ape.read_tree(text=phy_str), offset=0, encoding=self.encoding_type)
+        # one R call per tree: with several encodings, ask R for every
+        # feature ('all') and split the columns per encoding below
+        r_encoding = 'all' if len(self.encodings) > 1 else self.encoding_type
+        graph_data_base = gen_graph(ape.read_tree(text=phy_str), offset=0, encoding=r_encoding)
 
         graph_data = gen_graph(ape.read_tree(text=phy_str), offset=0)
         n1 = pd.Series(graph_data[1].rx2('node1'))
@@ -1337,23 +1658,25 @@ class Formatter:
             'to': node_2
             })
 
-
-        nodes_dist = graph_data_base[0].rx2('dist')
-        parents_dist = graph_data_base[0].rx2('dist_to_parent')
-        desc_ratio = graph_data_base[0].rx2('desc_ratio')
-        # tip = graph_data_base[0].rx2('tip')
-        # NOTE: must be a dict (named columns), not a set literal. A set has no
-        # guaranteed order and pandas builds one row per set element instead of
-        # one column per feature, which silently transposed and reshuffled the
-        # node feature columns (dist, dist_to_parent, desc_ratio) independently
-        # for every simulated tree.
-        node_attr = pd.DataFrame({
-            'dist': pd.Series(nodes_dist),
-            'dist_to_parent': pd.Series(parents_dist),
-            'desc_ratio': pd.Series(desc_ratio),
+        # all node-feature columns R returned, then each encoding's subset
+        # (in R's order). Reading fixed column names fails for encodings
+        # where a column is absent (rx2() then returns R NULL).
+        node_df_r = graph_data_base[0]
+        node_df = pd.DataFrame({
+            str(name): np.asarray(node_df_r.rx2(name), dtype=np.float64)
+            for name in node_df_r.names
         })
-        # node_1 = graph_data[1].rx2('node1')
-        # node_2 = graph_data[1].rx2('node2')
+        node_attr = {}
+        for enc in self.encodings:
+            cols = _encoding_features(enc)
+            missing = [c for c in cols if c not in node_df.columns]
+            if missing:
+                raise ValueError(f'{tre_fn}: encoding "{enc}" needs node features '
+                                 f'{missing}, which R did not return '
+                                 f'(got {list(node_df.columns)})')
+            node_attr[enc] = node_df[cols]
+        nodes_dist = node_df['dist_to_root'].to_numpy()
+
         num_edges = max(len(node_1), len(node_2))
         num_nodes = len(nodes_dist)
         offset = offset + num_edges
@@ -1398,10 +1721,19 @@ class Formatter:
         # process parameters to estimate
         param_est = pd.DataFrame()
         if mode == 'sim':
-            # split raw labels into est vs. data
-            assigned_labels = labels.columns.values.tolist()
+            # match param_est names to label columns ignoring case, '_' and '-'
+            # (e.g. 'modeltype' in the config matches 'model_type' in labels.csv)
+            def norm(s):
+                return str(s).lower().replace('_', '').replace('-', '')
+            label_cols = {norm(c): c for c in labels.columns}
             for header in self.param_est:
-                if header not in assigned_labels:
+                if header in labels.columns:
+                    continue
+                src = label_cols.get(norm(header))
+                if src is not None:
+                    labels[header] = labels[src]
+                else:
+                    # not defined for this model (e.g. BiSSE/MuSSE rates on a BD tree)
                     labels[header] = 10000000
             param_est = labels[self.param_est]
             # check label matching
@@ -1440,6 +1772,7 @@ class Formatter:
 
     
         # done!
+        # node_attr is a dict {encoding: DataFrame of node features}
         return idx, cpvs_data, node_attr, node_1, node_2, num_edges, num_nodes, aux_data, param_est # second argument was cpvs_data
     
     def make_summ_stat(self, phy, dat):
@@ -1503,11 +1836,19 @@ class Formatter:
                 summ_stats[f'f_dat_{i}'] = 0.0
                 summ_stats[f'n_dat_{i}'] = 0.0
 
-            # fill-in non-zero state freqs
-            unique, counts = np.unique(dat, return_counts=True)
-            for i,j in zip(states, counts):
-                summ_stats[f'f_dat_{i}'] = j / num_taxa
-                summ_stats[f'n_dat_{i}'] = j
+            # fill-in non-zero state freqs (match counts to the state value,
+            # so states absent from a tree keep a count of 0).
+            # dat can hold the states as strings ('0', '1', ...) together with
+            # the csv header ('data'), so only whole-number values are counted.
+            vals = pd.to_numeric(pd.Series(np.asarray(dat, dtype=object).ravel()),
+                                 errors='coerce').dropna().to_numpy()
+            vals = vals[np.isclose(vals, np.round(vals))].astype(np.int64)
+            unique, counts = np.unique(vals, return_counts=True)
+            for u, j in zip(unique, counts):
+                i = int(u)
+                if i in states:
+                    summ_stats[f'f_dat_{i}'] = j / num_taxa
+                    summ_stats[f'n_dat_{i}'] = j
                 
             for i in states:
                 f = summ_stats[f'f_dat_{i}']
@@ -1694,7 +2035,10 @@ class Formatter:
         return
 
     def load_data(self, mode):
-        """Load in full dataset for given filename prefix."""
+        """Load in full dataset for given filename prefix.
+
+        With several encodings, the HDF5 file of the first encoding is read
+        (phy_data, aux_data, labels and idx are the same in every file)."""
         # This should probably be put into utilities and reused
         # in all other steps.
 
@@ -1716,11 +2060,11 @@ class Formatter:
         aux_data_fn = f'{path_prefix}.aux_data.csv'
         idx_data_fn = f'{path_prefix}.index.csv'
         labels_fn = f'{path_prefix}.labels.csv'
-        hdf5_fn = f'{path_prefix}.hdf5'
-
-        # read data
         if self.tensor_format == 'hdf5':
-
+            hdf5_fn = self._find_hdf5_fn('test' if mode == 'sim' else 'empirical')
+            hdf5_file = h5py.File(hdf5_fn, 'r')
+            phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
+        # read data
 
             hdf5_file = h5py.File(hdf5_fn, 'r')
             phy_data = pd.DataFrame(hdf5_file['phy_data']).to_numpy()
