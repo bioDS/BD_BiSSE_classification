@@ -75,8 +75,10 @@ def make_step_args(step, args):
     ret = {}
 
     # check that step code is valid
-    if step not in 'SFTEP':
+    if step not in 'SFTEPG':
         raise ValueError
+
+    step_codes = 'EG' if step == 'G' else step
 
     # search through all registered phyddle settings
     settings = settings_registry()
@@ -176,19 +178,21 @@ def settings_registry():
         'save_phyenc_csv':     {'step': 'F',     'type': str,   'section': 'Format',  'default': 'F',             'help': 'Save encoded phylogenetic tensor encoding to csv?', 'bool': True},
         'save_graph_csv':       {'step':'F', 'type':str, 'section':'Format', 'default':'F',                     'help': 'Save graph encoding', 'bool': True},
         'select_classes':       {'step':'F', 'type': list,  'section':'Format', 'default': [0,1,2,3],           'help':  'Categorical classes to use for encoding if not all'},
+        'single_class':       {'step':'F', 'type': str,  'section':'Format', 'default': 'F',           'help':  'Flag for if we want to format single class (e.g. only BiSSE for testing purposes. DO NOT USE FOR TRAINING)'},
+
         'regression':       {'step':'TEP', 'type' : bool, 'section':'Train', 'default':False, 'help':'Whether to predict diversifcation rates instead of classification'},
         'aux_data':         {'step':'FTEP', 'type': list, 'section':'Format', 'default':[], 'help':'aux data labels, this option needs to be set manually and code should be updated to automate this'},
 
         # training options
         'num_epochs':           {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 50,             'help': 'Number of training epochs'},
-        'num_early_stop':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 3,              'help': 'Number of consecutive validation loss gains before early stopping'},
+        'num_early_stop':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 5,              'help': 'Number of consecutive validation loss gains before early stopping'},
         'trn_batch_size':       {'step': 'TEP',    'type': int,    'section': 'Train',  'default': 512,            'help': 'Training batch sizes'},
         'prop_test':            {'step': 'FT',     'type': float,  'section': 'Train',  'default': 0.05,           'help': 'Proportion of data used as test examples (assess trained network performance)'},
         'n_val_blocks':             {'step': 'T',      'type': int,  'section': 'Train',  'default': 1,           'help': 'Number of blocks used as validation examples (diagnose network overtraining)'},
         'loss_numerical':       {'step': 'T',      'type': str,    'section': 'Train',  'default': 'mse',          'help': 'Loss function for real value estimates', 'choices': ['mse', 'mae']},
-        'optimizer':            {'step': 'TP',      'type': str,    'section': 'Train',  'default': 'adam',         'help': 'Method used for optimizing neural network', 'choices': ['adam', 'adadelta', 'adagrad', 'adamw', 'rmsprop', 'sgd']},
+        'optimizer':            {'step': 'TEP',      'type': str,    'section': 'Train',  'default': 'adam',         'help': 'Method used for optimizing neural network', 'choices': ['adam', 'adadelta', 'adagrad', 'adamw', 'rmsprop', 'sgd']},
         'learning_rate':        {'step': 'TEP',      'type': float,  'section': 'Train',  'default': 0.001,          'help': 'Learning rate for optimizer'},
-        'activation_func':      {'step': 'T',      'type': str,    'section': 'Train',  'default': 'relu',         'help': 'Activation function for all internal layers', 'choices': ['relu', 'leaky_relu', 'elu', 'tanh', 'sigmoid']}, 
+        'activation_func':      {'step': 'TE',      'type': str,    'section': 'Train',  'default': 'relu',         'help': 'Activation function for all internal layers', 'choices': ['relu', 'leaky_relu', 'elu', 'tanh', 'sigmoid']}, 
         'log_offset':           {'step': 'FTEP',   'type': float,  'section': 'Train',  'default': 1.0,            'help': 'Offset size c when taking ln(x+c) for zero-valued variables'},
         'phy_channel_plain':    {'step': 'T',      'type': list,   'section': 'Train',  'default': [64, 96, 128],  'help': 'Output channel sizes for plain convolutional layers for phylogenetic state input'},
         'phy_hidden_size':      {'step':'TEP', 'type':int, 'section':'Train', 'default':50, 'help':'hidden layer size'},
@@ -205,13 +209,19 @@ def settings_registry():
         'phylo_pool':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use phylo pooling instead of average pooling', 'bool': True},
         'graph_conv':     {'step': 'TEP',     'type': str,   'section': 'Train',  'default': 'F',             'help': 'Use GraphConv instead of GCNConv', 'bool': True},
         'regularisation': {'step': 'TEP', 'type':str, 'section':'Train', 'default':'NA', 'help':'Apply L1 or L2 regularisation'},
-        'block_size': {'step':'T', 'type':int, 'section':'Train', 'default':1000, 'help':'number of graphs to load in one go'},
-        'dataset_size': {'step': 'T', 'type':int, 'section':'Train', 'default':-1, 'help':'number of trees to use from dataset. -1 uses the full dataset'},
-        'dropout':             {'step': 'T',      'type': float,  'section': 'Train',  'default': 0.01,           'help': 'Dropout probability in graph neural network'},
-        'accumulation_steps':             {'step': 'T',      'type': int,  'section': 'Train',  'default': 1,           'help': 'Number of actual mini-batches to treat as one mini-batch (to cope with memory constraints)'},
-        'extra_layers': {'step':'T', 'type':bool, 'section': 'Train', 'default':False, 'help':'whether to try a deeper neural network'},
-        'n_layers_avg': {'step':'T','type':int,'section':'Train','default':4, 'help':'default graph convolutional layers for GNN-avg'},
-        'n_layers_phylo' : {'step':'T', 'type':int,'section':'Train','default':3,'help':'default graph convolutional layers for GNN-phylo'},
+        'block_size': {'step':'TE', 'type':int, 'section':'Train', 'default':1000, 'help':'number of graphs to load in one go'},
+        'dataset_size': {'step': 'TE', 'type':int, 'section':'Train', 'default':-1, 'help':'number of trees to use from dataset. -1 uses the full dataset'},
+        'dropout':             {'step': 'TE',      'type': float,  'section': 'Train',  'default': 0.01,           'help': 'Dropout probability in graph neural network'},
+        'accumulation_steps':             {'step': 'TE',      'type': int,  'section': 'Train',  'default': 1,           'help': 'Number of actual mini-batches to treat as one mini-batch (to cope with memory constraints)'},
+        'extra_layers': {'step':'TE', 'type':bool, 'section': 'Train', 'default':False, 'help':'whether to try a deeper neural network'},
+        'n_layers_avg': {'step':'TE','type':int,'section':'Train','default':4, 'help':'default graph convolutional layers for GNN-avg'},
+        'n_layers_phylo' : {'step':'TE', 'type':int,'section':'Train','default':3,'help':'default graph convolutional layers for GNN-phylo'},
+        'trained_network':      {'step': 'EG',      'type': str,    'section': 'Estimate',  'default': None,        'help': 'Path to the network.py a trained model was built with, if network.py has changed since training'},
+        'subtree_pool':      {'step': 'T',      'type': bool,    'section': 'Train',  'default': 'F',        'help': 'Whether to use subtrees for pooling if PhyloPool option is also on'},
+        'n_parts': {'step': 'TE', 'type':int, 'section':'Train', 'default':8, 'help':'number of parts to split tree into with PhyloPool / SubtreePool'},
+        'max_model_states': {'step': 'FTE', 'type':int, 'section':'Format', 'default':2, 'help':'maximum number of MuSSE states to consider inputs for (default of 2 allows BD models and BiSSE, but not more complex MuSSE models)'},
+
+
 
         # PhyloCNN data importing
         'packed_models': {'step': 'F', 'type':dict, 'section':'Format', 'default':{'BD_div': 0, 'BiSSE': 1}, 'help':'mapping class names to integers'},
@@ -225,8 +235,54 @@ def settings_registry():
         'packed_state_key': {'step': 'F', 'type':str, 'section':'Format', 'default':"t_s", 'help':'label for states'},
         'packed_state_offset': {'step': 'F', 'type':int, 'section':'Format', 'default':1, 'help':'difference from state labels to csv integer encoding'},
         'fixed_split':           {'step': 'F',     'type': bool,    'section': 'Format', 'default':False, 'help': 'Whether to use existing training and testing split'},
-        'encoding_type':           {'step': 'F',     'type': str,    'section': 'Format', 'default':"graph", 'help': 'Which encoding to use - default GNN ("graph"), or phyloCNN encodings ("NC", "1N" or "2N")'},
-
+        'encoding_type':           {'step': 'FTE',     'type': str,    'section': 'Format', 'default':"graph", 'help': 'Which encoding to use - default GNN ("graph"), or phyloCNN encodings ("NC", "1N" or "2N")'},
+        'skip_unpack':           {'step': 'F',     'type': bool,    'section': 'Format', 'default':False, 'help': 'Whether to skip unpacking data from phyloCNN (useful if previously run)'},
+        'emb_require_labels': {'step': 'E', 'type': str, 'section': 'Estimate', 'default': 'F', 'help': 'whether to require param est labels', 'bool': True},
+'emb_model_fn'       : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Path to a trained model file (*.trained_model.pkl) to '
+                                    'extract embeddings from. Overrides the trn_dir/trn_prefix '
+                                    'lookup, so the network can come from a different project '
+                                    'to the data' },
+    'emb_norm_prefix'    : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Path prefix of the Train normalization files '
+                                    '({prefix}.trn_norm.attr_data.csv / .aux_data.csv). '
+                                    'Defaults to the trained model\'s own prefix' },
+ 
+    # --- dataset source ---
+    'emb_data_fn'        : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Comma-separated HDF5 file(s) from Format to compute '
+                                    'embeddings for. Overrides emb_fmt_dir/emb_fmt_prefix' },
+    'emb_fmt_dir'        : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Format directory of the dataset to embed '
+                                    '(default: fmt_dir)' },
+    'emb_fmt_prefix'     : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Format prefix of the dataset to embed '
+                                    '(default: fmt_prefix)' },
+    'emb_data_splits'    : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':'train,test',
+                             'help':'Comma-separated splits to read as '
+                                    '{emb_fmt_dir}/{emb_fmt_prefix}.{split}.hdf5' },
+ 
+    # --- output / behaviour ---
+    'emb_out_tag'        : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':None,
+                             'help':'Tag added to embedding output filenames to identify the '
+                                    'dataset (default: derived from the data source)' },
+    'emb_require_labels' : { 'step':'E', 'type':str, 'section':'Estimate',
+                             'default':'F', 'bool':True,
+                             'help':'Exit if param_est labels are missing from the dataset? '
+                                    'If F, missing labels are ignored (e.g. empirical data)' },
+ 
+    # --- block-wise reading (only add if not already registered) ---
+    'est_batch_size'     : { 'step':'E', 'type':int, 'section':'Estimate',
+                             'default':None,
+                             'help':'Graphs per forward pass when extracting embeddings '
+                                    '(default: trn_batch_size)' },
 
 
 
@@ -235,7 +291,8 @@ def settings_registry():
         'warn_lbl_outlier':     {'step': 'FEP',    'type': float,  'section': 'Estimate',  'default': 0.01,        'help': 'Percentile to detect extreme empirical label (abs.) values.'},
         'num_classes':           {'step': 'EP',     'type': int,    'section': 'Estimate', 'default':4, 'help': 'Number of categorical classes used for training'},
 
-        'calc_MLE':           {'step': 'EP',     'type': bool,    'section': 'Estimate', 'default':False, 'help': 'Whether to use MLE to compare likelihood of model types'},
+        'trained_model':        {'step': 'E',      'type': str,    'section': 'Estimate',  'default': None,        'help': 'Path to a .trained_model.pkl (any directory) to use instead of the one built from trn_dir/trn_prefix and training settings'},
+        'test_hdf5':            {'step': 'E',      'type': str,    'section': 'Estimate',  'default': None,        'help': 'Path to a test .hdf5 file (any directory) to use instead of {fmt_dir}/{fmt_prefix}.test.hdf5'},        'calc_MLE':           {'step': 'EP',     'type': bool,    'section': 'Estimate', 'default':False, 'help': 'Whether to use MLE to compare likelihood of model types'},
         'load_MLE':           {'step': 'EP',     'type': bool,    'section': 'Estimate', 'default':False, 'help': 'Whether to load MLE to compare likelihood of model types'},
 
 
